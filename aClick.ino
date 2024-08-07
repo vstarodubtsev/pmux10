@@ -3,6 +3,7 @@
 #include <Ethernet.h>
 #include <WebServer_WT32_ETH01.h>
 #include <GyverShift.h>
+#include <GParser.h>
 #include "ESPTelnet.h"
 
 #define WDT_TIMEOUT 3
@@ -27,6 +28,8 @@
 
 #define WDT_LED_GPIO 5  //35
 
+#define TELNET_PORT 23
+
 GyverPortal ui;
 
 WebServer wserver(80);
@@ -42,6 +45,7 @@ IPAddress myDNS(8, 8, 8, 8);
 GyverShift<OUTPUT, CHIP_AMOUNT> outp(CS_595, DAT_595, CLK_595);
 bool valSwitch[10];
 bool valRst[10];
+//bool jerome_output[22];
 
 int lastWdt = millis();
 int loopCounter = 0;
@@ -205,6 +209,81 @@ void set_rst(int num, int state) {
   }
 }
 
+// 1-10 - power 1-10
+// 22 rst 1
+// 21 rst 2
+// 20 rst 3
+// 19 rst 4
+// 18 rst 5
+// 17 rst 6
+// 16 rst 7
+// 15 rst 8
+// 14 rst 9
+// 13 rst 10
+
+void jerome_set(int num, int state) {
+
+  if (num < 1 || num > 22) {
+    return;
+  }
+
+  //jerome_output[num - 1] = state;  //TODO valSwitch
+
+  if (num >= 1 && num <= 10) {
+    set_power(num, state);
+    valSwitch[num - 1] = state;
+  } else if (num >= 13 && num <= 22) {
+    set_rst(23 - num, state);
+    valRst[22 - num] = state;
+  }
+}
+
+void jerome_set_all(int state) {
+  if (state) {
+    outp.setAll();
+    outp.update();
+
+    digitalWrite(CH9_GPIO, 1);
+    digitalWrite(CH10_GPIO, 1);
+    digitalWrite(RST9_GPIO, 1);
+    digitalWrite(RST10_GPIO, 1);
+
+  } else {
+    outp.clearAll();
+    outp.update();
+
+    digitalWrite(CH9_GPIO, 0);
+    digitalWrite(CH10_GPIO, 0);
+    digitalWrite(RST9_GPIO, 0);
+    digitalWrite(RST10_GPIO, 0);
+  }
+  /*
+  for (uint8_t i = 0; i < 22; i++) {
+    jerome_output[i] = state;
+  }*/
+  for (uint8_t i = 0; i < 10; i++) {
+    valSwitch[i] = state;
+    valRst[i] = state;
+  }
+}
+
+bool jerome_get(int num) {
+  if (num < 1 || num > 22) {
+    return false;
+  }
+
+  if (num >= 1 && num <= 10) {
+    return valSwitch[num - 1];
+  }
+
+  if (num >= 13 && num <= 22) {
+    return valRst[22 - num];
+  }
+
+  //return jerome_output[num - 1];
+  return false;
+}
+
 void onTelnetConnect(String ip) {
   Serial.print("- Telnet: ");
   Serial.print(ip);
@@ -214,16 +293,140 @@ void onTelnetConnect(String ip) {
   telnet.println("(Use ^] + q  to disconnect.)");
 }
 
+void onTelnetInput(String str) {
+  // checks for a certain command
+
+  // disconnect the client
+  if (str == "bye") {
+    telnet.println("> disconnecting you...");
+    telnet.disconnectClient();
+
+    return;
+  }
+
+  if (str.startsWith("$KE")) {
+
+    GParser data(str.begin(), ',');
+    int am = data.split();
+
+    if (strcmp(data[0], "$KE") != 0) {
+      telnet.println("#ERR");
+
+      return;
+    }
+
+    if (am == 1) {
+      telnet.println("#OK");
+
+      return;
+    }
+
+    if (strcmp(data[1], "WR") == 0 && am == 4) {
+      if (strcmp(data[2], "ALL") == 0) {
+        if (strcmp(data[3], "ON") == 0) {
+          jerome_set_all(1);
+          telnet.println("#WR,OK");
+          return;
+        }
+
+        if (strcmp(data[3], "OFF") == 0) {
+          jerome_set_all(0);
+          telnet.println("#WR,OK");
+
+          return;
+        }
+      } else {
+        int32_t line = data.getInt(2);
+        int32_t state = data.getInt(3);
+
+        if (line > 0 && line < 23 && state >= 0 && state <= 1) {
+          jerome_set(line, state);
+          telnet.println("#WR,OK");
+
+          return;
+        }
+      }
+    } else if (strcmp(data[1], "WRA") == 0 && am == 3) {
+
+      int len1 = strlen(data[2]);
+      if (len1 <= 22) {
+        int affected = 0;
+        for (uint8_t i = 0; i < len1; i++) {
+          const char c = data[2][i];
+
+          if (c == '1') {
+            jerome_set(i + 1, 1);
+            affected++;
+
+          } else if (c == '0') {
+            jerome_set(i + 1, 0);
+            affected++;
+
+          } else if (c == 'x' || c == 'X') {
+
+          } else {
+            telnet.println("#ERR");
+
+            return;
+          }
+        }
+
+        telnet.print("#WRA,OK,");
+        telnet.print(affected);
+        telnet.println();
+
+        return;
+      }
+    } else if (strcmp(data[1], "RID") == 0 && am == 3) {
+      if (strcmp(data[2], "ALL") == 0) {
+        telnet.print("#RID,ALL,");
+        for (uint8_t i = 1; i <= 22; i++) {
+          if (jerome_get(i)) {
+            telnet.print("1");
+          } else {
+            telnet.print("0");
+          }
+        }
+
+        telnet.println();
+
+        return;
+      }
+
+      int32_t line = data.getInt(2);
+
+      if (line >= 1 && line <= 22) {
+        bool state = jerome_get(line);
+
+        telnet.print("#RID,");
+        telnet.print(line);
+        telnet.print(",");
+        telnet.println(state);
+
+        return;
+      }
+    }
+
+    telnet.println("#ERR");
+
+    return;
+  }
+
+  {
+    telnet.println(str);
+  }
+}
+
 void setupTelnet() {
   // passing on functions for various telnet events
   telnet.onConnect(onTelnetConnect);
   /*telnet.onConnectionAttempt(onTelnetConnectionAttempt);
   telnet.onReconnect(onTelnetReconnect);*/
   //telnet.onDisconnect(onTelnetDisconnect);
-  /* telnet.onInputReceived(onTelnetInput);
-*/
-  Serial.print("- Telnet: ");
-  if (telnet.begin(23, false)) {
+  telnet.onInputReceived(onTelnetInput);
+
+  Serial.print("Telnet: ");
+  if (telnet.begin(TELNET_PORT, false)) {
     Serial.println("running");
   } else {
     Serial.println("error.");
