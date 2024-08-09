@@ -6,6 +6,8 @@
 #include <GParser.h>
 #include "ESPTelnet.h"
 
+#define FIRMWARE_VERSION "1.0"
+
 #define WDT_TIMEOUT 3
 
 #define DEBUG_ETHERNET_WEBSERVER_PORT Serial
@@ -28,7 +30,9 @@
 
 #define WDT_LED_GPIO 5  //35
 
-#define TELNET_PORT 23
+#define TELNET_PORT 2424
+
+#define JEROME_PORT_COUNT 22
 
 GyverPortal ui;
 
@@ -43,125 +47,153 @@ IPAddress mySN(255, 255, 255, 0);
 IPAddress myDNS(8, 8, 8, 8);
 
 GyverShift<OUTPUT, CHIP_AMOUNT> outp(CS_595, DAT_595, CLK_595);
-bool valSwitch[10];
-bool valRst[10];
-//bool jerome_output[22];
+
+bool jerome_output[JEROME_PORT_COUNT];
 
 int lastWdt = millis();
 int loopCounter = 0;
 
+const char* swPwrPrefix = "sw";
+
+//const char* swPower[] = { "sw1", "sw2", "sw3", "sw4", "sw5", "sw6", "sw7", "sw8", "sw9", "sw10" };
+const char* swRst[] = { "rst1", "rst2", "rst3", "rst4", "rst5", "rst6", "rst7", "rst8", "rst9", "rst10" };
+String valIpv4;
+String valIpv4Mask;
+String valMac;
+
 // конструктор страницы
 void build() {
-  GP.BUILD_BEGIN(GP_DARK);
+  GP.BUILD_BEGIN(GP_DARK, 480);
+
+  GP.PAGE_TITLE("PMUX10");
+
+  // ОБНОВЛЕНИЯ
+  String s;
+  // формируем список для UPDATE
+  // вида "lbl/0,lbl/1..."
+  for (int i = 0; i < 10; i++) {
+    s += swPwrPrefix;
+    s += "/";
+    s += i;
+    s += ',';
+  }
+
+  for (uint8_t i = 0; i < (sizeof(swRst) / sizeof(swRst[0])); i++) {
+    s += swRst[i];
+    s += ',';
+  }
+
+  //s += "Uptime";
+
+  GP.UPDATE(s);
+
+  //GP.UPDATE("sw1,sw2,swRst,Uptime");  //TODO
 
   GP.TITLE("PMUX10", "t1");
   GP.HR();
 
-  // GP.NAV_TABS_LINKS("/,/home,/sett,/kek", "Home,Settings,Kek");
+  GP.NAV_TABS("Home,Information,Settings");
 
+  GP.NAV_BLOCK_BEGIN();
   M_BOX(
     M_BLOCK_TAB(
       "Power",
-      M_BOX(GP.LABEL("power1: "); GP.SWITCH("sw1", valSwitch[0]););
-      M_BOX(GP.LABEL("power2: "); GP.SWITCH("sw2", valSwitch[1]););
-      M_BOX(GP.LABEL("power3: "); GP.SWITCH("sw3", valSwitch[2]););
-      M_BOX(GP.LABEL("power4: "); GP.SWITCH("sw4", valSwitch[3]););
-      M_BOX(GP.LABEL("power5: "); GP.SWITCH("sw5", valSwitch[4]););
-      M_BOX(GP.LABEL("power6: "); GP.SWITCH("sw6", valSwitch[5]););
-      M_BOX(GP.LABEL("power7: "); GP.SWITCH("sw7", valSwitch[6]););
-      M_BOX(GP.LABEL("power8: "); GP.SWITCH("sw8", valSwitch[7]););
-      M_BOX(GP.LABEL("power9: "); GP.SWITCH("sw9", valSwitch[8]););
-      M_BOX(GP.LABEL("power10: "); GP.SWITCH("sw10", valSwitch[9]);););
+
+      for (uint8_t i = 0; i < 10; i++) {
+        M_BOX(GP.LABEL(String("power") + (i + 1) + ": "); GP.SWITCH(String(swPwrPrefix) + "/" + i, jerome_output[i]););
+      }
+
+      /*
+      M_BOX(GP.LABEL("power1: "); GP.SWITCH(swPower[0], jerome_output[0]););
+      M_BOX(GP.LABEL("power2: "); GP.SWITCH(swPower[1], jerome_output[1]););
+      M_BOX(GP.LABEL("power3: "); GP.SWITCH(swPower[2], jerome_output[2]););
+      M_BOX(GP.LABEL("power4: "); GP.SWITCH(swPower[3], jerome_output[3]););
+      M_BOX(GP.LABEL("power5: "); GP.SWITCH(swPower[4], jerome_output[4]););
+      M_BOX(GP.LABEL("power6: "); GP.SWITCH(swPower[5], jerome_output[5]););
+      M_BOX(GP.LABEL("power7: "); GP.SWITCH(swPower[6], jerome_output[6]););
+      M_BOX(GP.LABEL("power8: "); GP.SWITCH(swPower[7], jerome_output[7]););
+      M_BOX(GP.LABEL("power9: "); GP.SWITCH(swPower[8], jerome_output[8]););
+      M_BOX(GP.LABEL("power10: "); GP.SWITCH(swPower[9], jerome_output[9]););*/
+    );
 
     M_BLOCK_TAB(
       "Reset",
-      M_BOX(GP.LABEL("reset1: "); GP.SWITCH("rst1", valRst[0]););
-      M_BOX(GP.LABEL("reset2: "); GP.SWITCH("rst2", valRst[1]););
-      M_BOX(GP.LABEL("reset3: "); GP.SWITCH("rst3", valRst[2]););
-      M_BOX(GP.LABEL("reset4: "); GP.SWITCH("rst4", valRst[3]););
-      M_BOX(GP.LABEL("reset5: "); GP.SWITCH("rst5", valRst[4]););
-      M_BOX(GP.LABEL("reset6: "); GP.SWITCH("rst6", valRst[5]););
-      M_BOX(GP.LABEL("reset7: "); GP.SWITCH("rst7", valRst[6]););
-      M_BOX(GP.LABEL("reset8: "); GP.SWITCH("rst8", valRst[7]););
-      M_BOX(GP.LABEL("reset9: "); GP.SWITCH("rst9", valRst[8]););
-      M_BOX(GP.LABEL("reset10: "); GP.SWITCH("rst10", valRst[9]););););
+      M_BOX(GP.LABEL("reset1: "); GP.SWITCH(swRst[0], jerome_output[21]););
+      M_BOX(GP.LABEL("reset2: "); GP.SWITCH(swRst[1], jerome_output[20]););
+      M_BOX(GP.LABEL("reset3: "); GP.SWITCH(swRst[2], jerome_output[19]););
+      M_BOX(GP.LABEL("reset4: "); GP.SWITCH(swRst[3], jerome_output[18]););
+      M_BOX(GP.LABEL("reset5: "); GP.SWITCH(swRst[4], jerome_output[17]););
+      M_BOX(GP.LABEL("reset6: "); GP.SWITCH(swRst[5], jerome_output[16]););
+      M_BOX(GP.LABEL("reset7: "); GP.SWITCH(swRst[6], jerome_output[15]););
+      M_BOX(GP.LABEL("reset8: "); GP.SWITCH(swRst[7], jerome_output[14]););
+      M_BOX(GP.LABEL("reset9: "); GP.SWITCH(swRst[8], jerome_output[13]););
+      M_BOX(GP.LABEL("reset10: "); GP.SWITCH(swRst[9], jerome_output[12]););););
+  GP.NAV_BLOCK_END();
 
-  /*
-  GP.TEXT("txt", "text", valText);
-  GP.BREAK();
-  GP.NUMBER("num", "number", valNum);
-  GP.BREAK();
-  GP.PASS("pass", "pass", valPass);
-  GP.BREAK();
-  GP.SPINNER("spn", valSpin);
-  GP.SLIDER("sld", valSlider, 0, 10);
-  GP.BREAK();
-  GP.DATE("date", valDate);
-  GP.BREAK();
-  GP.TIME("time", valTime);
-  GP.BREAK();
-  GP.COLOR("col", valCol);
-  GP.BREAK();
-  GP.SELECT("sel", "val 1,val 2,val 3", valSelect);
-  GP.BREAK();
-  GP.RADIO("rad", 0, valRad);
-  GP.LABEL("Value 0");
-  GP.BREAK();
-  GP.RADIO("rad", 1, valRad);
-  GP.LABEL("Value 1");
-  GP.BREAK();
-  GP.RADIO("rad", 2, valRad);
-  GP.LABEL("Value 2");
-  GP.BREAK();
-  GP.RADIO("rad", 3, valRad);
-  GP.LABEL("Value 3");
-  GP.BREAK();
-  GP.BREAK();*/
-  //GP.BUTTON("btn", "Button");
+  GP.NAV_BLOCK_BEGIN();
+  GP.SYSTEM_INFO(FIRMWARE_VERSION);
+  GP.NAV_BLOCK_END();
 
-  /*
-  M_SPOILER(
-    "Spoiler",
-    GP.LABEL("Hello!"););
+  GP.NAV_BLOCK_BEGIN();
+  M_BOX(GP.LABEL("IP address"); GP.TEXT("ipv4_addr", "192.168.1.101", valIpv4); GP.BUTTON_MINI("apply_ipv4_btn", "Change"););
+  M_BOX(GP.LABEL("IP mask"); GP.TEXT("ipv4_mask", "255.255.255.0", valIpv4Mask); GP.BUTTON_MINI("apply_ipv4_mask_btn", "Change"););
+  M_BOX(GP.LABEL("MAC address"); GP.TEXT("mac", "00:01:02:03:04:05", valMac); GP.BUTTON_MINI("apply_mac_btn", "Change"););
 
-  M_BLOCK(
-    GP.LABEL("Checks & LED");
-    GP.BREAK();
-    GP.LABEL_BLOCK("label block");
-    GP.LED("");
-    GP.CHECK("");
-    GP.SWITCH(""););
+  GP.NAV_BLOCK_END();
 
-  M_BLOCK_TAB(
-    "Block Tab",
-    GP.LABEL("Inputs");
-    M_BOX(GP.LABEL("Number"); GP.NUMBER("", "", 123););
-    M_BOX(GP.LABEL("Float"); GP.NUMBER_F("", "", 3.14););
-    M_BOX(GP.LABEL("Text"); GP.TEXT("", "", "Hello"););
-    M_BOX(GP.LABEL("Password"); GP.PASS("", "", "Pass"););
-    GP.AREA("", 3, "Text area"););
-
-  M_BLOCK_THIN(
-    M_BOX(GP.LABEL("Date"); GP.DATE(""););
-    M_BOX(GP.LABEL("Time"); GP.TIME(""););
-    M_BOX(GP.LABEL("Color"); GP.COLOR("");););
-
-  M_BLOCK_THIN_TAB(
-    "Thin Tab",
-    GP.LABEL("Upload File/Folder");
-    M_BOX(
-      GP_CENTER,
-      GP.FILE_UPLOAD("");
-      GP.FOLDER_UPLOAD("");););
-
-  M_BOX(GP.LABEL("Select"); GP.SELECT("", "Some,Drop,List"););
-  M_BOX(GP.LABEL("Slider"); GP.SLIDER(""););
-  M_BOX(GP.LABEL("Spinner"); GP.SPINNER(""););
-
-  GP.BUTTON("", "Button");
-  GP.BUTTON_MINI("", "Btn Mini");
-*/
   GP.BUILD_END();
+}
+
+void action() {
+  // был клик по компоненту
+  if (ui.click()) {
+
+    if (ui.clickSub(swPwrPrefix)) {  // начинается с sld
+
+      Serial.print("switch ");
+      Serial.print(ui.clickNameSub(1));  // получаем цифру
+      Serial.print(": ");
+      uint8_t index = atoi(ui.clickNameSub().c_str());
+      Serial.print(index);
+      Serial.print(": ");
+      Serial.println(ui.getBool());
+
+      jerome_output[index] = ui.getBool();
+
+      // if (ui.clickBool(ui.clickName(), jerome_output[index])) {
+      set_power(index + 1, jerome_output[index]);
+      //}
+    }
+
+    /*
+    for (uint8_t i = 0; i < (sizeof(swPower) / sizeof(swPower[0])); i++) {
+      if (ui.clickBool(swPower[i], jerome_output[i])) {
+        set_power(i + 1, jerome_output[i]);
+      }
+    }
+*/
+    for (uint8_t i = 0; i < (sizeof(swRst) / sizeof(swRst[0])); i++) {
+      if (ui.clickBool(swRst[i], jerome_output[21 - i])) {
+        set_rst(i + 1, jerome_output[21 - i]);
+      }
+    }
+
+    if (ui.click("apply_ipv4_btn")) Serial.println("ipv4 button click");
+    if (ui.click("apply_ipv4_mask_btn")) Serial.println("ipv4 mask button click");
+    if (ui.click("apply_mac_btn")) Serial.println("mac button click");
+  }
+
+  if (ui.update()) {
+    if (ui.updateSub(swPwrPrefix)) {
+      ui.answer(jerome_output[atoi(ui.updateNameSub().c_str())]);
+    }
+
+    for (uint8_t i = 0; i < (sizeof(swRst) / sizeof(swRst[0])); i++) {
+      if (ui.update(swRst[i])) ui.answer(jerome_output[21 - i]);
+    }
+
+    if (ui.update("Uptime")) ui.answer(millis() / 1000ul);
+  }
 }
 
 void init_peripheral() {
@@ -209,33 +241,18 @@ void set_rst(int num, int state) {
   }
 }
 
-// 1-10 - power 1-10
-// 22 rst 1
-// 21 rst 2
-// 20 rst 3
-// 19 rst 4
-// 18 rst 5
-// 17 rst 6
-// 16 rst 7
-// 15 rst 8
-// 14 rst 9
-// 13 rst 10
-
 void jerome_set(int num, int state) {
-
-  if (num < 1 || num > 22) {
+  if (num < 1 || num > JEROME_PORT_COUNT) {
     return;
   }
 
-  //jerome_output[num - 1] = state;  //TODO valSwitch
-
   if (num >= 1 && num <= 10) {
     set_power(num, state);
-    valSwitch[num - 1] = state;
-  } else if (num >= 13 && num <= 22) {
-    set_rst(23 - num, state);
-    valRst[22 - num] = state;
+  } else if (num >= 13 && num <= JEROME_PORT_COUNT) {
+    set_rst(JEROME_PORT_COUNT + 1 - num, state);
   }
+
+  jerome_output[num - 1] = state;
 }
 
 void jerome_set_all(int state) {
@@ -257,40 +274,27 @@ void jerome_set_all(int state) {
     digitalWrite(RST9_GPIO, 0);
     digitalWrite(RST10_GPIO, 0);
   }
-  /*
-  for (uint8_t i = 0; i < 22; i++) {
+
+  for (uint8_t i = 0; i < JEROME_PORT_COUNT; i++) {
     jerome_output[i] = state;
-  }*/
-  for (uint8_t i = 0; i < 10; i++) {
-    valSwitch[i] = state;
-    valRst[i] = state;
   }
 }
 
 bool jerome_get(int num) {
-  if (num < 1 || num > 22) {
+  if (num < 1 || num > JEROME_PORT_COUNT) {
     return false;
   }
 
-  if (num >= 1 && num <= 10) {
-    return valSwitch[num - 1];
-  }
-
-  if (num >= 13 && num <= 22) {
-    return valRst[22 - num];
-  }
-
-  //return jerome_output[num - 1];
-  return false;
+  return jerome_output[num - 1];
 }
 
 void onTelnetConnect(String ip) {
-  Serial.print("- Telnet: ");
-  Serial.print(ip);
-  Serial.println(" connected");
+  //Serial.print("Telnet: ");
+  //Serial.print(ip);
+  //Serial.println(" connected");
 
   telnet.println("\nWelcome " + telnet.getIP());
-  telnet.println("(Use ^] + q  to disconnect.)");
+  telnet.println("(Use ^] + q or type bye to disconnect.)");
 }
 
 void onTelnetInput(String str) {
@@ -305,7 +309,6 @@ void onTelnetInput(String str) {
   }
 
   if (str.startsWith("$KE")) {
-
     GParser data(str.begin(), ',');
     int am = data.split();
 
@@ -339,7 +342,7 @@ void onTelnetInput(String str) {
         int32_t line = data.getInt(2);
         int32_t state = data.getInt(3);
 
-        if (line > 0 && line < 23 && state >= 0 && state <= 1) {
+        if (line > 0 && line <= JEROME_PORT_COUNT && state >= 0 && state <= 1) {
           jerome_set(line, state);
           telnet.println("#WR,OK");
 
@@ -347,9 +350,8 @@ void onTelnetInput(String str) {
         }
       }
     } else if (strcmp(data[1], "WRA") == 0 && am == 3) {
-
       int len1 = strlen(data[2]);
-      if (len1 <= 22) {
+      if (len1 <= JEROME_PORT_COUNT) {
         int affected = 0;
         for (uint8_t i = 0; i < len1; i++) {
           const char c = data[2][i];
@@ -380,7 +382,7 @@ void onTelnetInput(String str) {
     } else if (strcmp(data[1], "RID") == 0 && am == 3) {
       if (strcmp(data[2], "ALL") == 0) {
         telnet.print("#RID,ALL,");
-        for (uint8_t i = 1; i <= 22; i++) {
+        for (uint8_t i = 1; i <= JEROME_PORT_COUNT; i++) {
           if (jerome_get(i)) {
             telnet.print("1");
           } else {
@@ -395,7 +397,7 @@ void onTelnetInput(String str) {
 
       int32_t line = data.getInt(2);
 
-      if (line >= 1 && line <= 22) {
+      if (line >= 1 && line <= JEROME_PORT_COUNT) {
         bool state = jerome_get(line);
 
         telnet.print("#RID,");
@@ -406,22 +408,16 @@ void onTelnetInput(String str) {
         return;
       }
     }
-
-    telnet.println("#ERR");
-
-    return;
   }
 
-  {
-    telnet.println(str);
-  }
+  telnet.println("#ERR");
 }
 
 void setupTelnet() {
   // passing on functions for various telnet events
   telnet.onConnect(onTelnetConnect);
-  /*telnet.onConnectionAttempt(onTelnetConnectionAttempt);
-  telnet.onReconnect(onTelnetReconnect);*/
+  //telnet.onConnectionAttempt(onTelnetConnectionAttempt);
+  //telnet.onReconnect(onTelnetReconnect);
   //telnet.onDisconnect(onTelnetDisconnect);
   telnet.onInputReceived(onTelnetInput);
 
@@ -477,88 +473,6 @@ void setup() {
   Serial.println(ETH.localIP());
 
   setupTelnet();
-}
-
-void action() {
-  // был клик по компоненту
-  if (ui.click()) {
-    // проверяем компоненты и обновляем переменные
-    /*
-    // 1. переписали вручную
-    if (ui.click("ch")) {
-      valCheck = ui.getBool("ch");
-      Serial.print("Check: ");
-      Serial.println(valCheck);
-      set_rst(1, valCheck);
-    }*/
-
-    const char* sw[] = { "sw1", "sw2", "sw3", "sw4", "sw5", "sw6", "sw7", "sw8", "sw9", "sw10" };
-
-    for (uint8_t i = 0; i < (sizeof(sw) / sizeof(sw[0])); i++) {
-      if (ui.clickBool(sw[i], valSwitch[i])) {
-        set_power(i + 1, valSwitch[i]);
-      }
-    }
-
-    const char* swRst[] = { "rst1", "rst2", "rst3", "rst4", "rst5", "rst6", "rst7", "rst8", "rst9", "rst10" };
-
-    for (uint8_t i = 0; i < (sizeof(swRst) / sizeof(swRst[0])); i++) {
-      if (ui.clickBool(swRst[i], valRst[i])) {
-        set_rst(i + 1, valRst[i]);
-      }
-    }
-    /*
-    if (ui.clickString("txt", valText)) {
-      Serial.print("Text: ");
-      Serial.println(valText);
-    }
-
-    if (ui.clickInt("num", valNum)) {
-      Serial.print("Number: ");
-      Serial.println(valNum);
-    }
-
-    if (ui.clickStr("pass", valPass)) {
-      Serial.print("Password: ");
-      Serial.println(valPass);
-    }
-
-    if (ui.clickFloat("spn", valSpin)) {
-      Serial.print("Spinner: ");
-      Serial.println(valSpin);
-    }
-
-    if (ui.clickInt("sld", valSlider)) {
-      Serial.print("Slider: ");
-      Serial.println(valSlider);
-    }
-
-    if (ui.clickDate("date", valDate)) {
-      Serial.print("Date: ");
-      Serial.println(valDate.encode());
-    }
-
-    if (ui.clickTime("time", valTime)) {
-      Serial.print("Time: ");
-      Serial.println(valTime.encode());
-    }
-
-    if (ui.clickColor("col", valCol)) {
-      Serial.print("Color: ");
-      Serial.println(valCol.encode());
-    }
-
-    if (ui.clickInt("sel", valSelect)) {
-      Serial.print("Select: ");
-      Serial.println(valSelect);
-    }
-    if (ui.clickInt("rad", valRad)) {
-      Serial.print("Radio: ");
-      Serial.println(valRad);
-    }
-*/
-    //if (ui.click("btn")) Serial.println("Button click");
-  }
 }
 
 void loop() {
