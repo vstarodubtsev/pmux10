@@ -6,16 +6,16 @@
 #include <GParser.h>
 #include "ESPTelnet.h"
 
+#define PROJECT_NAME "PMUX10"
 #define FIRMWARE_VERSION "1.0"
 
 #define WDT_TIMEOUT 3
 
 #define DEBUG_ETHERNET_WEBSERVER_PORT Serial
 
-// Debug Level from 0 to 4
-#define _ETHERNET_WEBSERVER_LOGLEVEL_ 3
+#define _ETHERNET_WEBSERVER_LOGLEVEL_ 3  // Debug Level from 0 to 4
 
-#define CHIP_AMOUNT 2
+#define SHIFT_CHIP_AMOUNT 2
 
 #define CLK_595 12
 #define CS_595 4
@@ -39,168 +39,152 @@ GyverPortal ui;
 WebServer wserver(80);
 
 ESPTelnet telnet;
-IPAddress ip;
 
 IPAddress myIP(192, 168, 1, 101);
 IPAddress myGW(192, 168, 1, 1);
 IPAddress mySN(255, 255, 255, 0);
-IPAddress myDNS(8, 8, 8, 8);
 
-GyverShift<OUTPUT, CHIP_AMOUNT> outp(CS_595, DAT_595, CLK_595);
+GyverShift<OUTPUT, SHIFT_CHIP_AMOUNT> shiftRegister(CS_595, DAT_595, CLK_595);
 
-bool jerome_output[JEROME_PORT_COUNT];
+bool jeromeOutput[JEROME_PORT_COUNT];
 
 int lastWdt = millis();
 int loopCounter = 0;
 
-const char* swPwrPrefix = "sw";
+#define INTERFACE_ELEMENTS_COUNT 10
 
-//const char* swPower[] = { "sw1", "sw2", "sw3", "sw4", "sw5", "sw6", "sw7", "sw8", "sw9", "sw10" };
-const char* swRst[] = { "rst1", "rst2", "rst3", "rst4", "rst5", "rst6", "rst7", "rst8", "rst9", "rst10" };
+#define INPUT_IPV4_ID "ipv4_inp"
+#define INPUT_IPV4_MASK_ID "ipv4_mask_inp"
+#define INPUT_MAC_ID "mac_inp"
+
+#define BUTTON_APPLY_IPV4_ID "apply_ipv4_btn"
+#define BUTTON_APPLY_IPV4_MASK_ID "apply_ipv4_mask_btn"
+#define BUTTON_APPLY_MAC_ID "apply_mac_btn"
+#define BUTTON_RESET_ID "reset_btn"
+#define BUTTON_SAVE_ID "save_btn"
+
+const char* swPwrPrefix = "sw";
+const char* swRstPrefix = "rst";
+
 String valIpv4;
 String valIpv4Mask;
 String valMac;
 
-// конструктор страницы
-void build() {
+void uiBuild() {
   GP.BUILD_BEGIN(GP_DARK, 480);
+  GP.PAGE_TITLE(PROJECT_NAME);
+  GP.TITLE(PROJECT_NAME, "t1");
 
-  GP.PAGE_TITLE("PMUX10");
-
-  // ОБНОВЛЕНИЯ
   String s;
-  // формируем список для UPDATE
-  // вида "lbl/0,lbl/1..."
-  for (int i = 0; i < 10; i++) {
+  // формируем список для UPDATE вида "lbl/0,lbl/1..."
+  for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
     s += swPwrPrefix;
     s += "/";
     s += i;
     s += ',';
   }
 
-  for (uint8_t i = 0; i < (sizeof(swRst) / sizeof(swRst[0])); i++) {
-    s += swRst[i];
+  for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    s += swRstPrefix;
+    s += "/";
+    s += i;
     s += ',';
   }
 
-  //s += "Uptime";
-
   GP.UPDATE(s);
 
-  //GP.UPDATE("sw1,sw2,swRst,Uptime");  //TODO
-
-  GP.TITLE("PMUX10", "t1");
   GP.HR();
 
-  GP.NAV_TABS("Home,Information,Settings");
+  GP.NAV_TABS_LINKS("/,/info,/settings", "Home,Information,Settings");
 
-  GP.NAV_BLOCK_BEGIN();
-  M_BOX(
-    M_BLOCK_TAB(
-      "Power",
+  if (ui.uri("/info")) {
+    GP.SYSTEM_INFO(FIRMWARE_VERSION);
+  } else if (ui.uri("/settings")) {
+    GP.FORM_BEGIN("/settings");
+    M_BOX(GP.LABEL("IP address"); GP.TEXT(INPUT_IPV4_ID, myIP.toString(), valIpv4); GP.BUTTON_MINI(BUTTON_APPLY_IPV4_ID, "Change"););
+    M_BOX(GP.LABEL("IP mask"); GP.TEXT(INPUT_IPV4_MASK_ID, mySN.toString(), valIpv4Mask); GP.BUTTON_MINI(BUTTON_APPLY_IPV4_MASK_ID, "Change"););
+    M_BOX(GP.LABEL("MAC address"); GP.TEXT(INPUT_MAC_ID, "00:01:02:03:04:05", valMac); GP.BUTTON_MINI(BUTTON_APPLY_MAC_ID, "Change"););
+    GP.BUTTON(BUTTON_RESET_ID, "Reset to defaults");
+    GP.SUBMIT("Save to NV");
+    GP.FORM_END();
 
-      for (uint8_t i = 0; i < 10; i++) {
-        M_BOX(GP.LABEL(String("power") + (i + 1) + ": "); GP.SWITCH(String(swPwrPrefix) + "/" + i, jerome_output[i]););
-      }
+  } else { //home page
+    M_BOX(
+      M_BLOCK_TAB(
+        "Power",
+        for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+          M_BOX(GP.LABEL(String("power") + (i + 1) + ": "); GP.SWITCH(String(swPwrPrefix) + "/" + i, jeromeOutput[i]););
+        });
 
-      /*
-      M_BOX(GP.LABEL("power1: "); GP.SWITCH(swPower[0], jerome_output[0]););
-      M_BOX(GP.LABEL("power2: "); GP.SWITCH(swPower[1], jerome_output[1]););
-      M_BOX(GP.LABEL("power3: "); GP.SWITCH(swPower[2], jerome_output[2]););
-      M_BOX(GP.LABEL("power4: "); GP.SWITCH(swPower[3], jerome_output[3]););
-      M_BOX(GP.LABEL("power5: "); GP.SWITCH(swPower[4], jerome_output[4]););
-      M_BOX(GP.LABEL("power6: "); GP.SWITCH(swPower[5], jerome_output[5]););
-      M_BOX(GP.LABEL("power7: "); GP.SWITCH(swPower[6], jerome_output[6]););
-      M_BOX(GP.LABEL("power8: "); GP.SWITCH(swPower[7], jerome_output[7]););
-      M_BOX(GP.LABEL("power9: "); GP.SWITCH(swPower[8], jerome_output[8]););
-      M_BOX(GP.LABEL("power10: "); GP.SWITCH(swPower[9], jerome_output[9]););*/
-    );
-
-    M_BLOCK_TAB(
-      "Reset",
-      M_BOX(GP.LABEL("reset1: "); GP.SWITCH(swRst[0], jerome_output[21]););
-      M_BOX(GP.LABEL("reset2: "); GP.SWITCH(swRst[1], jerome_output[20]););
-      M_BOX(GP.LABEL("reset3: "); GP.SWITCH(swRst[2], jerome_output[19]););
-      M_BOX(GP.LABEL("reset4: "); GP.SWITCH(swRst[3], jerome_output[18]););
-      M_BOX(GP.LABEL("reset5: "); GP.SWITCH(swRst[4], jerome_output[17]););
-      M_BOX(GP.LABEL("reset6: "); GP.SWITCH(swRst[5], jerome_output[16]););
-      M_BOX(GP.LABEL("reset7: "); GP.SWITCH(swRst[6], jerome_output[15]););
-      M_BOX(GP.LABEL("reset8: "); GP.SWITCH(swRst[7], jerome_output[14]););
-      M_BOX(GP.LABEL("reset9: "); GP.SWITCH(swRst[8], jerome_output[13]););
-      M_BOX(GP.LABEL("reset10: "); GP.SWITCH(swRst[9], jerome_output[12]););););
-  GP.NAV_BLOCK_END();
-
-  GP.NAV_BLOCK_BEGIN();
-  GP.SYSTEM_INFO(FIRMWARE_VERSION);
-  GP.NAV_BLOCK_END();
-
-  GP.NAV_BLOCK_BEGIN();
-  M_BOX(GP.LABEL("IP address"); GP.TEXT("ipv4_addr", "192.168.1.101", valIpv4); GP.BUTTON_MINI("apply_ipv4_btn", "Change"););
-  M_BOX(GP.LABEL("IP mask"); GP.TEXT("ipv4_mask", "255.255.255.0", valIpv4Mask); GP.BUTTON_MINI("apply_ipv4_mask_btn", "Change"););
-  M_BOX(GP.LABEL("MAC address"); GP.TEXT("mac", "00:01:02:03:04:05", valMac); GP.BUTTON_MINI("apply_mac_btn", "Change"););
-
-  GP.NAV_BLOCK_END();
+      M_BLOCK_TAB(
+        "Reset",
+        for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+          M_BOX(GP.LABEL(String("reset") + (i + 1) + ": "); GP.SWITCH(String(swRstPrefix) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - 1 - i]););
+        }););
+    GP.BUTTON("clear_all_btn", "Clear all");
+  }
 
   GP.BUILD_END();
 }
 
-void action() {
-  // был клик по компоненту
+void uiAction() {
   if (ui.click()) {
-
-    if (ui.clickSub(swPwrPrefix)) {  // начинается с sld
-
-      Serial.print("switch ");
-      Serial.print(ui.clickNameSub(1));  // получаем цифру
-      Serial.print(": ");
+    if (ui.clickSub(swPwrPrefix)) {
       uint8_t index = atoi(ui.clickNameSub().c_str());
-      Serial.print(index);
-      Serial.print(": ");
-      Serial.println(ui.getBool());
 
-      jerome_output[index] = ui.getBool();
+      jeromeOutput[index] = ui.getBool();
+      setPower(index + 1, jeromeOutput[index]);
 
-      // if (ui.clickBool(ui.clickName(), jerome_output[index])) {
-      set_power(index + 1, jerome_output[index]);
-      //}
+    } else if (ui.clickSub(swRstPrefix)) {
+      uint8_t index = atoi(ui.clickNameSub().c_str());
+      bool val = ui.getBool();
+
+      jeromeOutput[JEROME_PORT_COUNT - 1 - index] = val;
+      setRst(index + 1, val);
+
+    } else if (ui.click(BUTTON_APPLY_IPV4_ID)) {
+      String val;
+      ui.copyString(INPUT_IPV4_ID, val);
+      Serial.print("ipv4 button click value");
+      Serial.println(val);
+
+    } else if (ui.click(BUTTON_APPLY_IPV4_MASK_ID)) {
+      Serial.println("ipv4 mask button click");
+
+    } else if (ui.click(BUTTON_APPLY_MAC_ID)) {
+      Serial.println("mac button click");
     }
-
-    /*
-    for (uint8_t i = 0; i < (sizeof(swPower) / sizeof(swPower[0])); i++) {
-      if (ui.clickBool(swPower[i], jerome_output[i])) {
-        set_power(i + 1, jerome_output[i]);
-      }
-    }
-*/
-    for (uint8_t i = 0; i < (sizeof(swRst) / sizeof(swRst[0])); i++) {
-      if (ui.clickBool(swRst[i], jerome_output[21 - i])) {
-        set_rst(i + 1, jerome_output[21 - i]);
-      }
-    }
-
-    if (ui.click("apply_ipv4_btn")) Serial.println("ipv4 button click");
-    if (ui.click("apply_ipv4_mask_btn")) Serial.println("ipv4 mask button click");
-    if (ui.click("apply_mac_btn")) Serial.println("mac button click");
   }
 
   if (ui.update()) {
     if (ui.updateSub(swPwrPrefix)) {
-      ui.answer(jerome_output[atoi(ui.updateNameSub().c_str())]);
-    }
+      ui.answer(jeromeOutput[atoi(ui.updateNameSub().c_str())]);
 
-    for (uint8_t i = 0; i < (sizeof(swRst) / sizeof(swRst[0])); i++) {
-      if (ui.update(swRst[i])) ui.answer(jerome_output[21 - i]);
+    } else if (ui.updateSub(swRstPrefix)) {
+      ui.answer(jeromeOutput[JEROME_PORT_COUNT - 1 - atoi(ui.updateNameSub().c_str())]);
     }
+  }
 
-    if (ui.update("Uptime")) ui.answer(millis() / 1000ul);
+  if (ui.form()) {
+    if (ui.form("/settings")) {
+      String val = ui.getString(INPUT_IPV4_ID);
+
+      if (!val.isEmpty()) {
+        IPAddress ip;
+
+        if (ip.fromString(val)) {
+          myIP = ip;
+        }
+      }
+    }
   }
 }
 
-void init_peripheral() {
+void initPeripheral() {
   digitalWrite(nOE_595, 1);
   pinMode(nOE_595, OUTPUT);
-  outp.clearAll();
-  outp.update();
+  shiftRegister.clearAll();
+  shiftRegister.update();
   digitalWrite(nOE_595, 0);
 
   digitalWrite(CH9_GPIO, 0);
@@ -215,10 +199,10 @@ void init_peripheral() {
   pinMode(WDT_LED_GPIO, OUTPUT);
 }
 
-void set_power(int num, uint8_t state) {
+void setPower(int num, bool state) {
   if (num > 0 && num <= 8) {
-    outp[num - 1] = state;
-    outp.update();
+    shiftRegister[num - 1] = state;
+    shiftRegister.update();
 
   } else if (num == 9) {
     digitalWrite(CH9_GPIO, state);
@@ -228,10 +212,10 @@ void set_power(int num, uint8_t state) {
   }
 }
 
-void set_rst(int num, int state) {
+void setRst(int num, bool state) {
   if (num > 0 && num <= 8) {
-    outp[16 - num] = state;
-    outp.update();
+    shiftRegister[16 - num] = state;
+    shiftRegister.update();
 
   } else if (num == 9) {
     digitalWrite(RST9_GPIO, state);
@@ -241,24 +225,24 @@ void set_rst(int num, int state) {
   }
 }
 
-void jerome_set(int num, int state) {
+void jeromeSet(int num, bool state) {
   if (num < 1 || num > JEROME_PORT_COUNT) {
     return;
   }
 
   if (num >= 1 && num <= 10) {
-    set_power(num, state);
+    setPower(num, state);
   } else if (num >= 13 && num <= JEROME_PORT_COUNT) {
-    set_rst(JEROME_PORT_COUNT + 1 - num, state);
+    setRst(JEROME_PORT_COUNT + 1 - num, state);
   }
 
-  jerome_output[num - 1] = state;
+  jeromeOutput[num - 1] = state;
 }
 
-void jerome_set_all(int state) {
+void jeromeSetAll(bool state) {
   if (state) {
-    outp.setAll();
-    outp.update();
+    shiftRegister.setAll();
+    shiftRegister.update();
 
     digitalWrite(CH9_GPIO, 1);
     digitalWrite(CH10_GPIO, 1);
@@ -266,8 +250,8 @@ void jerome_set_all(int state) {
     digitalWrite(RST10_GPIO, 1);
 
   } else {
-    outp.clearAll();
-    outp.update();
+    shiftRegister.clearAll();
+    shiftRegister.update();
 
     digitalWrite(CH9_GPIO, 0);
     digitalWrite(CH10_GPIO, 0);
@@ -276,16 +260,16 @@ void jerome_set_all(int state) {
   }
 
   for (uint8_t i = 0; i < JEROME_PORT_COUNT; i++) {
-    jerome_output[i] = state;
+    jeromeOutput[i] = state;
   }
 }
 
-bool jerome_get(int num) {
+bool jeromeGet(int num) {
   if (num < 1 || num > JEROME_PORT_COUNT) {
     return false;
   }
 
-  return jerome_output[num - 1];
+  return jeromeOutput[num - 1];
 }
 
 void onTelnetConnect(String ip) {
@@ -327,13 +311,13 @@ void onTelnetInput(String str) {
     if (strcmp(data[1], "WR") == 0 && am == 4) {
       if (strcmp(data[2], "ALL") == 0) {
         if (strcmp(data[3], "ON") == 0) {
-          jerome_set_all(1);
+          jeromeSetAll(1);
           telnet.println("#WR,OK");
           return;
         }
 
         if (strcmp(data[3], "OFF") == 0) {
-          jerome_set_all(0);
+          jeromeSetAll(0);
           telnet.println("#WR,OK");
 
           return;
@@ -343,7 +327,7 @@ void onTelnetInput(String str) {
         int32_t state = data.getInt(3);
 
         if (line > 0 && line <= JEROME_PORT_COUNT && state >= 0 && state <= 1) {
-          jerome_set(line, state);
+          jeromeSet(line, state);
           telnet.println("#WR,OK");
 
           return;
@@ -357,15 +341,15 @@ void onTelnetInput(String str) {
           const char c = data[2][i];
 
           if (c == '1') {
-            jerome_set(i + 1, 1);
+            jeromeSet(i + 1, 1);
             affected++;
 
           } else if (c == '0') {
-            jerome_set(i + 1, 0);
+            jeromeSet(i + 1, 0);
             affected++;
 
           } else if (c == 'x' || c == 'X') {
-
+            ;  //skip item
           } else {
             telnet.println("#ERR");
 
@@ -383,7 +367,7 @@ void onTelnetInput(String str) {
       if (strcmp(data[2], "ALL") == 0) {
         telnet.print("#RID,ALL,");
         for (uint8_t i = 1; i <= JEROME_PORT_COUNT; i++) {
-          if (jerome_get(i)) {
+          if (jeromeGet(i)) {
             telnet.print("1");
           } else {
             telnet.print("0");
@@ -398,7 +382,7 @@ void onTelnetInput(String str) {
       int32_t line = data.getInt(2);
 
       if (line >= 1 && line <= JEROME_PORT_COUNT) {
-        bool state = jerome_get(line);
+        bool state = jeromeGet(line);
 
         telnet.print("#RID,");
         telnet.print(line);
@@ -431,7 +415,7 @@ void setupTelnet() {
 }
 
 void setup() {
-  init_peripheral();
+  initPeripheral();
 
   Serial.begin(115200);
   /*WiFi.mode(WIFI_STA);
@@ -446,10 +430,7 @@ void setup() {
   WT32_ETH01_onEvent();
 
   ETH.begin();
-
-  // Static IP, leave without this line to get IP via DHCP
-  //bool config(IPAddress local_ip, IPAddress gateway, IPAddress subnet, IPAddress dns1 = 0, IPAddress dns2 = 0);
-  ETH.config(myIP, myGW, mySN, myDNS);
+  ETH.config(myIP, myGW, mySN);
 
   WT32_ETH01_waitForConnect();
 
@@ -459,14 +440,13 @@ void setup() {
     .trigger_panic = true,
   };
 
-  // esp_task_wdt_init(WDT_TIMEOUT, true);  //enable panic so ESP32 restarts
   esp_task_wdt_init(&twdt_config);
   esp_task_wdt_add(NULL);  //add current thread to WDT watch
   esp_task_wdt_reset();
 
-  // подключаем конструктор и запускаем
-  ui.attachBuild(build);
-  ui.attach(action);
+  // start user interface
+  ui.attachBuild(uiBuild);
+  ui.attach(uiAction);
   ui.start();
 
   Serial.print(F("HTTP EthernetWebServer is @ IP : "));
