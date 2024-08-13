@@ -4,6 +4,8 @@
 #include <WebServer_WT32_ETH01.h>
 #include <GyverShift.h>
 #include <GParser.h>
+#include <FileData.h>
+#include <LittleFS.h>
 #include "ESPTelnet.h"
 
 #define PROJECT_NAME "PMUX10"
@@ -14,6 +16,8 @@
 #define DEBUG_ETHERNET_WEBSERVER_PORT Serial
 
 #define _ETHERNET_WEBSERVER_LOGLEVEL_ 3  // Debug Level from 0 to 4
+
+#define MAC_SIZE 6
 
 #define SHIFT_CHIP_AMOUNT 2
 
@@ -34,23 +38,6 @@
 
 #define JEROME_PORT_COUNT 22
 
-GyverPortal ui;
-
-WebServer wserver(80);
-
-ESPTelnet telnet;
-
-IPAddress myIP(192, 168, 1, 101);
-IPAddress myGW(192, 168, 1, 1);
-IPAddress mySN(255, 255, 255, 0);
-
-GyverShift<OUTPUT, SHIFT_CHIP_AMOUNT> shiftRegister(CS_595, DAT_595, CLK_595);
-
-bool jeromeOutput[JEROME_PORT_COUNT];
-
-int lastWdt = millis();
-int loopCounter = 0;
-
 #define INTERFACE_ELEMENTS_COUNT 10
 
 #define INPUT_IPV4_ID "ipv4_inp"
@@ -63,6 +50,30 @@ int loopCounter = 0;
 #define BUTTON_RESET_ID "reset_btn"
 #define BUTTON_SAVE_ID "save_btn"
 
+struct Data {
+  uint32_t ipv4;
+  uint32_t mask;
+  uint32_t gw;
+  char mac[MAC_SIZE];  //18
+  char reserved[46];
+};
+Data nvData;
+
+FileData fData(&LittleFS, "/data.bin", 'B', &nvData, sizeof(nvData));
+
+GyverPortal ui;
+
+WebServer wserver(80);
+
+ESPTelnet telnet;
+
+GyverShift<OUTPUT, SHIFT_CHIP_AMOUNT> shiftRegister(CS_595, DAT_595, CLK_595);
+
+bool jeromeOutput[JEROME_PORT_COUNT];
+
+int lastWdt = millis();
+int loopCounter = 0;
+
 const char* swPwrPrefix = "sw";
 const char* swRstPrefix = "rst";
 
@@ -70,13 +81,38 @@ String valIpv4;
 String valIpv4Mask;
 String valMac;
 
+String mac2String(char m[]) {
+  String s;
+  for (int i = 0; i < MAC_SIZE; ++i) {
+    char buf[3];
+    sprintf(buf, "%02X", m[i]);
+    s += buf;
+    if (i < 5) s += ':';
+  }
+  return s;
+}
+
+int parseMac(const char* str, char sep, char* bytes) {
+  for (int i = 0; i < MAC_SIZE; i++) {
+    bytes[i] = strtoul(str, NULL, 16);
+    str = strchr(str, sep);
+    if (str == NULL || *str == '\0') {
+      if (i != 5) return -1;
+      break;
+    }
+    str++;
+  }
+
+  return 0;
+}
+
 void uiBuild() {
   GP.BUILD_BEGIN(GP_DARK, 480);
   GP.PAGE_TITLE(PROJECT_NAME);
   GP.TITLE(PROJECT_NAME, "t1");
 
   String s;
-  // формируем список для UPDATE вида "lbl/0,lbl/1..."
+
   for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
     s += swPwrPrefix;
     s += "/";
@@ -101,14 +137,20 @@ void uiBuild() {
     GP.SYSTEM_INFO(FIRMWARE_VERSION);
   } else if (ui.uri("/settings")) {
     GP.FORM_BEGIN("/settings");
-    M_BOX(GP.LABEL("IP address"); GP.TEXT(INPUT_IPV4_ID, myIP.toString(), valIpv4); GP.BUTTON_MINI(BUTTON_APPLY_IPV4_ID, "Change"););
-    M_BOX(GP.LABEL("IP mask"); GP.TEXT(INPUT_IPV4_MASK_ID, mySN.toString(), valIpv4Mask); GP.BUTTON_MINI(BUTTON_APPLY_IPV4_MASK_ID, "Change"););
-    M_BOX(GP.LABEL("MAC address"); GP.TEXT(INPUT_MAC_ID, "00:01:02:03:04:05", valMac); GP.BUTTON_MINI(BUTTON_APPLY_MAC_ID, "Change"););
+    M_BOX(
+      GP.LABEL("IP address");
+      GP.TEXT(INPUT_IPV4_ID, IPAddress(nvData.ipv4).toString(), valIpv4));
+    M_BOX(
+      GP.LABEL("IP mask");
+      GP.TEXT(INPUT_IPV4_MASK_ID, IPAddress(nvData.mask).toString(), valIpv4Mask));
+    M_BOX(
+      GP.LABEL("MAC address");
+      GP.TEXT(INPUT_MAC_ID, mac2String(nvData.mac), valMac));
     GP.BUTTON(BUTTON_RESET_ID, "Reset to defaults");
     GP.SUBMIT("Save to NV");
     GP.FORM_END();
 
-  } else { //home page
+  } else {  //home page
     M_BOX(
       M_BLOCK_TAB(
         "Power",
@@ -147,12 +189,6 @@ void uiAction() {
       ui.copyString(INPUT_IPV4_ID, val);
       Serial.print("ipv4 button click value");
       Serial.println(val);
-
-    } else if (ui.click(BUTTON_APPLY_IPV4_MASK_ID)) {
-      Serial.println("ipv4 mask button click");
-
-    } else if (ui.click(BUTTON_APPLY_MAC_ID)) {
-      Serial.println("mac button click");
     }
   }
 
@@ -167,14 +203,45 @@ void uiAction() {
 
   if (ui.form()) {
     if (ui.form("/settings")) {
+      bool changed = false;
       String val = ui.getString(INPUT_IPV4_ID);
 
       if (!val.isEmpty()) {
         IPAddress ip;
 
         if (ip.fromString(val)) {
-          myIP = ip;
+          nvData.ipv4 = ip;
+          changed = true;
         }
+      }
+
+      val = ui.getString(INPUT_IPV4_MASK_ID);
+
+      if (!val.isEmpty()) {
+        IPAddress ip;
+
+        if (ip.fromString(val)) {
+          // TODO checks
+          nvData.mask = ip;
+          changed = true;
+        }
+      }
+
+      val = ui.getString(INPUT_MAC_ID);
+
+      if (!val.isEmpty()) {
+        char m[MAC_SIZE];
+
+        if (parseMac(val.c_str(), ':', m) == 0) {
+          m[0] &= ~0x01;
+          memcpy(nvData.mac, m, sizeof(m));
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        Serial.print("apply NV ");
+        fData.update();
       }
     }
   }
@@ -414,10 +481,73 @@ void setupTelnet() {
   }
 }
 
+void setupNv() {
+  memset(&nvData, 0, sizeof(nvData));
+
+  LittleFS.begin(true);
+
+  FDstat_t stat = fData.read();
+
+  switch (stat) {
+    case FD_FS_ERR:
+      Serial.println("FS Error");
+      break;
+    case FD_FILE_ERR:
+      Serial.println("Error");
+      break;
+    case FD_WRITE:
+      Serial.println("Data Write");
+      break;
+    case FD_ADD:
+      Serial.println("Data Add");
+      break;
+    case FD_READ:
+      Serial.println("Data Read");
+      break;
+    default:
+      break;
+  }
+
+  if (nvData.ipv4 == 0) {
+    nvData.ipv4 = IPAddress(192, 168, 1, 101);
+  }
+
+  if (nvData.mask == 0) {
+    nvData.mask = IPAddress(255, 255, 255, 0);
+  }
+
+  if (nvData.gw == 0) {
+    nvData.gw = IPAddress(192, 168, 1, 1);
+  }
+
+  if (nvData.mac[0] == 0 && nvData.mac[1] == 0
+      && nvData.mac[2] == 0 && nvData.mac[3] == 0
+      && nvData.mac[4] == 0 && nvData.mac[5] == 0) {
+    for (int i = 0; i < MAC_SIZE; i++) {
+      nvData.mac[i] = random(0xff);
+    }
+
+    nvData.mac[0] &= ~0x01;
+    nvData.mac[1] |= 0x02;
+  }
+
+  Serial.print("NV IPv4 ");
+  Serial.print(IPAddress(nvData.ipv4));
+  Serial.print("/");
+  Serial.println(IPAddress(nvData.mask));
+  Serial.print("NV GW ");
+  Serial.println(IPAddress(nvData.gw));
+  Serial.print("NV MAC: ");
+  Serial.println(mac2String(nvData.mac));
+}
+
 void setup() {
   initPeripheral();
 
   Serial.begin(115200);
+
+  setupNv();
+
   /*WiFi.mode(WIFI_STA);
   WiFi.begin(AP_SSID, AP_PASS);
   while (WiFi.status() != WL_CONNECTED) {
@@ -430,7 +560,7 @@ void setup() {
   WT32_ETH01_onEvent();
 
   ETH.begin();
-  ETH.config(myIP, myGW, mySN);
+  ETH.config(IPAddress(nvData.ipv4), IPAddress(nvData.gw), IPAddress(nvData.mask));
 
   WT32_ETH01_waitForConnect();
 
@@ -457,6 +587,8 @@ void setup() {
 
 void loop() {
   ui.tick();
+
+  if (fData.tick() == FD_WRITE) Serial.println("NV data updated");
 
   telnet.loop();
 
