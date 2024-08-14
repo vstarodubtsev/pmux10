@@ -6,6 +6,7 @@
 #include <GParser.h>
 #include <FileData.h>
 #include <LittleFS.h>
+#include <esp_mac.h>
 #include "ESPTelnet.h"
 
 #define PROJECT_NAME "PMUX10"
@@ -16,8 +17,6 @@
 #define DEBUG_ETHERNET_WEBSERVER_PORT Serial
 
 #define _ETHERNET_WEBSERVER_LOGLEVEL_ 3  // Debug Level from 0 to 4
-
-#define MAC_SIZE 6
 
 #define SHIFT_CHIP_AMOUNT 2
 
@@ -44,9 +43,6 @@
 #define INPUT_IPV4_MASK_ID "ipv4_mask_inp"
 #define INPUT_MAC_ID "mac_inp"
 
-#define BUTTON_APPLY_IPV4_ID "apply_ipv4_btn"
-#define BUTTON_APPLY_IPV4_MASK_ID "apply_ipv4_mask_btn"
-#define BUTTON_APPLY_MAC_ID "apply_mac_btn"
 #define BUTTON_RESET_ID "reset_btn"
 #define BUTTON_SAVE_ID "save_btn"
 
@@ -54,8 +50,8 @@ struct Data {
   uint32_t ipv4;
   uint32_t mask;
   uint32_t gw;
-  char mac[MAC_SIZE];  //18
-  char reserved[46];
+  uint8_t mac[ETH_ADDR_LEN];
+  uint8_t reserved[46];
 };
 Data nvData;
 
@@ -81,9 +77,9 @@ String valIpv4;
 String valIpv4Mask;
 String valMac;
 
-String mac2String(char m[]) {
+String mac2String(uint8_t m[]) {
   String s;
-  for (int i = 0; i < MAC_SIZE; ++i) {
+  for (int i = 0; i < ETH_ADDR_LEN; ++i) {
     char buf[3];
     sprintf(buf, "%02X", m[i]);
     s += buf;
@@ -92,9 +88,9 @@ String mac2String(char m[]) {
   return s;
 }
 
-int parseMac(const char* str, char sep, char* bytes) {
-  for (int i = 0; i < MAC_SIZE; i++) {
-    bytes[i] = strtoul(str, NULL, 16);
+int parseMac(const char* str, char sep, uint8_t* mac) {
+  for (int i = 0; i < ETH_ADDR_LEN; i++) {
+    mac[i] = strtoul(str, NULL, 16);
     str = strchr(str, sep);
     if (str == NULL || *str == '\0') {
       if (i != 5) return -1;
@@ -184,11 +180,9 @@ void uiAction() {
       jeromeOutput[JEROME_PORT_COUNT - 1 - index] = val;
       setRst(index + 1, val);
 
-    } else if (ui.click(BUTTON_APPLY_IPV4_ID)) {
-      String val;
-      ui.copyString(INPUT_IPV4_ID, val);
-      Serial.print("ipv4 button click value");
-      Serial.println(val);
+    } else if (ui.click(BUTTON_RESET_ID)) {
+      memset(&nvData, 0, sizeof(nvData));
+      fData.update();
     }
   }
 
@@ -211,6 +205,7 @@ void uiAction() {
 
         if (ip.fromString(val)) {
           nvData.ipv4 = ip;
+          nvData.gw = ip & 0xffffff00 + 1;
           changed = true;
         }
       }
@@ -230,17 +225,20 @@ void uiAction() {
       val = ui.getString(INPUT_MAC_ID);
 
       if (!val.isEmpty()) {
-        char m[MAC_SIZE];
+        uint8_t m[ETH_ADDR_LEN];
 
         if (parseMac(val.c_str(), ':', m) == 0) {
           m[0] &= ~0x01;
           memcpy(nvData.mac, m, sizeof(m));
           changed = true;
+
+          Serial.print("Set MAC: ");
+          Serial.println(mac2String(nvData.mac));
         }
       }
 
       if (changed) {
-        Serial.print("apply NV ");
+        Serial.println("apply NV");
         fData.update();
       }
     }
@@ -487,6 +485,7 @@ void setupNv() {
   LittleFS.begin(true);
 
   FDstat_t stat = fData.read();
+  bool nvOk = stat == FD_READ;
 
   switch (stat) {
     case FD_FS_ERR:
@@ -502,28 +501,29 @@ void setupNv() {
       Serial.println("Data Add");
       break;
     case FD_READ:
-      Serial.println("Data Read");
+      Serial.println("NV Data Read OK!");
       break;
     default:
       break;
   }
 
-  if (nvData.ipv4 == 0) {
+  if (nvData.ipv4 == 0 || !nvOk) {
     nvData.ipv4 = IPAddress(192, 168, 1, 101);
   }
 
-  if (nvData.mask == 0) {
+  if (nvData.mask == 0 || !nvOk) {
     nvData.mask = IPAddress(255, 255, 255, 0);
   }
 
-  if (nvData.gw == 0) {
+  if (nvData.gw == 0 || !nvOk) {
     nvData.gw = IPAddress(192, 168, 1, 1);
   }
 
-  if (nvData.mac[0] == 0 && nvData.mac[1] == 0
-      && nvData.mac[2] == 0 && nvData.mac[3] == 0
-      && nvData.mac[4] == 0 && nvData.mac[5] == 0) {
-    for (int i = 0; i < MAC_SIZE; i++) {
+  if ((nvData.mac[0] == 0 && nvData.mac[1] == 0
+       && nvData.mac[2] == 0 && nvData.mac[3] == 0
+       && nvData.mac[4] == 0 && nvData.mac[5] == 0)
+      || !nvOk) {
+    for (int i = 0; i < ETH_ADDR_LEN; i++) {
       nvData.mac[i] = random(0xff);
     }
 
@@ -559,6 +559,7 @@ void setup() {
   // To be called before ETH.begin()
   WT32_ETH01_onEvent();
 
+  esp_iface_mac_addr_set(nvData.mac, ESP_MAC_ETH);
   ETH.begin();
   ETH.config(IPAddress(nvData.ipv4), IPAddress(nvData.gw), IPAddress(nvData.mask));
 
@@ -583,6 +584,8 @@ void setup() {
   Serial.println(ETH.localIP());
 
   setupTelnet();
+
+  Serial.println("Init done");
 }
 
 void loop() {
