@@ -44,7 +44,9 @@
 #define INPUT_MAC_ID "mac_inp"
 
 #define BUTTON_RESET_ID "reset_btn"
+#define POPUP_RESET_CONFIRM_ID "reset_cnfrm"
 #define BUTTON_SAVE_ID "save_btn"
+#define BUTTON_CLEAR_ALL_ID "clear_all_btn"
 
 struct Data {
   uint32_t ipv4;
@@ -142,9 +144,12 @@ void uiBuild() {
     M_BOX(
       GP.LABEL("MAC address");
       GP.TEXT(INPUT_MAC_ID, mac2String(nvData.mac), valMac));
-    GP.BUTTON(BUTTON_RESET_ID, "Reset to defaults");
+    GP.BUTTON_MINI(BUTTON_RESET_ID, "Reset to defaults");
     GP.SUBMIT("Save to NV");
     GP.FORM_END();
+
+    GP.CONFIRM(POPUP_RESET_CONFIRM_ID, F("Are you sure want to reset?"));
+    GP.UPDATE_CLICK(POPUP_RESET_CONFIRM_ID, BUTTON_RESET_ID);
 
   } else {  //home page
     M_BOX(
@@ -159,7 +164,7 @@ void uiBuild() {
         for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
           M_BOX(GP.LABEL(String("reset") + (i + 1) + ": "); GP.SWITCH(String(swRstPrefix) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - 1 - i]););
         }););
-    GP.BUTTON("clear_all_btn", "Clear all");
+    GP.BUTTON(BUTTON_CLEAR_ALL_ID, "Clear all");
   }
 
   GP.BUILD_END();
@@ -180,9 +185,13 @@ void uiAction() {
       jeromeOutput[JEROME_PORT_COUNT - 1 - index] = val;
       setRst(index + 1, val);
 
-    } else if (ui.click(BUTTON_RESET_ID)) {
-      memset(&nvData, 0, sizeof(nvData));
-      fData.update();
+    } else if (ui.click(POPUP_RESET_CONFIRM_ID)) {
+      if (ui.getBool()) {
+        memset(&nvData, 0, sizeof(nvData));
+        fData.update();
+      }
+    } else if (ui.click(BUTTON_CLEAR_ALL_ID)) {
+      jeromeSetAll(0);
     }
   }
 
@@ -192,6 +201,9 @@ void uiAction() {
 
     } else if (ui.updateSub(swRstPrefix)) {
       ui.answer(jeromeOutput[JEROME_PORT_COUNT - 1 - atoi(ui.updateNameSub().c_str())]);
+
+    } else if (ui.update(POPUP_RESET_CONFIRM_ID)) {
+      ui.answer(1);
     }
   }
 
