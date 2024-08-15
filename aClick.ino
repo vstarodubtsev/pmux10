@@ -1,18 +1,18 @@
 #include <esp_task_wdt.h>
+#include <esp_mac.h>
+#include <LittleFS.h>  // must be before GyverPortal
 #include <GyverPortal.h>
 #include <Ethernet.h>
 #include <WebServer_WT32_ETH01.h>
 #include <GyverShift.h>
 #include <GParser.h>
 #include <FileData.h>
-#include <LittleFS.h>
-#include <esp_mac.h>
-#include "ESPTelnet.h"
+#include <ESPTelnet.h>
 
 #define PROJECT_NAME "PMUX10"
 #define FIRMWARE_VERSION "1.0"
 
-#define WDT_TIMEOUT 3
+#define WDT_TIMEOUT 15
 
 #define DEBUG_ETHERNET_WEBSERVER_PORT Serial
 
@@ -59,7 +59,7 @@ Data nvData;
 
 FileData fData(&LittleFS, "/data.bin", 'B', &nvData, sizeof(nvData));
 
-GyverPortal ui;
+GyverPortal ui(&LittleFS);
 
 WebServer wserver(80);
 
@@ -109,30 +109,13 @@ void uiBuild() {
   GP.PAGE_TITLE(PROJECT_NAME);
   GP.TITLE(PROJECT_NAME, "t1");
 
-  String s;
-
-  for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
-    s += swPwrPrefix;
-    s += "/";
-    s += i;
-    s += ',';
-  }
-
-  for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
-    s += swRstPrefix;
-    s += "/";
-    s += i;
-    s += ',';
-  }
-
-  GP.UPDATE(s);
-
   GP.HR();
 
-  GP.NAV_TABS_LINKS("/,/info,/settings", "Home,Information,Settings");
+  GP.NAV_TABS_LINKS("/,/info,/settings,/logs,/upgrade", "Home,Information,Settings,Logs,Upgrade");  //TODO ota
 
   if (ui.uri("/info")) {
     GP.SYSTEM_INFO(FIRMWARE_VERSION);
+
   } else if (ui.uri("/settings")) {
     GP.FORM_BEGIN("/settings");
     M_BOX(
@@ -151,6 +134,16 @@ void uiBuild() {
     GP.CONFIRM(POPUP_RESET_CONFIRM_ID, F("Are you sure want to reset?"));
     GP.UPDATE_CLICK(POPUP_RESET_CONFIRM_ID, BUTTON_RESET_ID);
 
+  } else if (ui.uri("/logs")) {
+    GP.TEXT("txt", "");
+    GP.BUTTON_MINI("btn", "Send", "txt");
+    GP.BREAK();
+
+    GP.AREA_LOG(32);
+
+  } else if (ui.uri("/upgrade")) {
+    GP.OTA_FIRMWARE("Firmware", GP_GREEN, true);
+    // GP.OTA_FILESYSTEM();
   } else {  //home page
     M_BOX(
       M_BLOCK_TAB(
@@ -165,6 +158,24 @@ void uiBuild() {
           M_BOX(GP.LABEL(String("reset") + (i + 1) + ": "); GP.SWITCH(String(swRstPrefix) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - 1 - i]););
         }););
     GP.BUTTON(BUTTON_CLEAR_ALL_ID, "Clear all");
+
+    String s;
+
+    for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+      s += swPwrPrefix;
+      s += "/";
+      s += i;
+      s += ',';
+    }
+
+    for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+      s += swRstPrefix;
+      s += "/";
+      s += i;
+      s += ',';
+    }
+
+    GP.UPDATE(s);
   }
 
   GP.BUILD_END();
@@ -192,6 +203,9 @@ void uiAction() {
       }
     } else if (ui.click(BUTTON_CLEAR_ALL_ID)) {
       jeromeSetAll(0);
+
+    } else if (ui.click("btn")) {
+      ui.log.println(ui.getString("btn"));
     }
   }
 
@@ -553,10 +567,26 @@ void setupNv() {
   Serial.println(mac2String(nvData.mac));
 }
 
+void setupWdt() {
+  esp_task_wdt_config_t twdt_config = {
+    .timeout_ms = WDT_TIMEOUT * 1000,
+    .idle_core_mask = (1 << 2) - 1,  // Bitmask of all cores
+    .trigger_panic = true,
+  };
+
+  esp_task_wdt_deinit();
+  esp_task_wdt_init(&twdt_config);
+  esp_task_wdt_add(NULL);  //add current thread to WDT watch
+  esp_task_wdt_reset();
+}
+
 void setup() {
   initPeripheral();
 
   Serial.begin(115200);
+
+  Serial.print(F("Starting version: "));
+  Serial.println(FIRMWARE_VERSION);
 
   setupNv();
 
@@ -577,20 +607,14 @@ void setup() {
 
   WT32_ETH01_waitForConnect();
 
-  esp_task_wdt_config_t twdt_config = {
-    .timeout_ms = WDT_TIMEOUT,
-    .idle_core_mask = (1 << 2) - 1,  // Bitmask of all cores
-    .trigger_panic = true,
-  };
-
-  esp_task_wdt_init(&twdt_config);
-  esp_task_wdt_add(NULL);  //add current thread to WDT watch
-  esp_task_wdt_reset();
+  setupWdt();
 
   // start user interface
   ui.attachBuild(uiBuild);
   ui.attach(uiAction);
   ui.start();
+  ui.enableOTA();  // login pass
+  ui.log.start(64);
 
   Serial.print(F("HTTP EthernetWebServer is @ IP : "));
   Serial.println(ETH.localIP());
