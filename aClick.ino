@@ -5,7 +5,7 @@
 #include <Ethernet.h>
 #include <WebServer_WT32_ETH01.h>
 #include <GyverShift.h>
-#include <GParser.h>
+#include <StringUtils.h>
 #include <FileData.h>
 #include <ESPTelnet.h>
 
@@ -409,6 +409,8 @@ void onTelnetConnect(String ip) {
 void onTelnetInput(String str) {
   // checks for a certain command
 
+  str.toUpperCase();
+
   // disconnect the client
   if (str == "bye") {
     telnet.println("> disconnecting you...");
@@ -418,38 +420,39 @@ void onTelnetInput(String str) {
   }
 
   if (str.startsWith("$KE")) {
-    GParser data(str.begin(), ','); //TODO replace with StringUtils
-    int am = data.split();
+    su::Splitter argv(str, ',');
 
-    if (strcmp(data[0], "$KE") != 0) {
+    const uint8_t argc = argv.length();
+
+    if (argv[0] != "$KE") {
       telnet.println("#ERR");
 
       return;
     }
 
-    if (am == 1) {
+    if (argc == 1) {
       telnet.println("#OK");
 
       return;
     }
 
-    if (strcmp(data[1], "WR") == 0 && am == 4) {
-      if (strcmp(data[2], "ALL") == 0) {
-        if (strcmp(data[3], "ON") == 0) {
+    if (argv[1] == "WR" && argc == 4) {
+      if (argv[2] == "ALL") {
+        if (argv[3] == "ON") {
           jeromeSetAll(1);
           telnet.println("#WR,OK");
           return;
         }
 
-        if (strcmp(data[3], "OFF") == 0) {
+        if (argv[3] == "OFF") {
           jeromeSetAll(0);
           telnet.println("#WR,OK");
 
           return;
         }
       } else {
-        int32_t line = data.getInt(2);
-        int32_t state = data.getInt(3);
+        const int32_t line = argv[2].toInt();
+        const int32_t state = argv[3].toInt();
 
         if (line > 0 && line <= JEROME_PORT_COUNT && state >= 0 && state <= 1) {
           jeromeSet(line, state);
@@ -458,12 +461,12 @@ void onTelnetInput(String str) {
           return;
         }
       }
-    } else if (strcmp(data[1], "WRA") == 0 && am == 3) {
-      int len1 = strlen(data[2]);
+    } else if (argv[1] == "WRA" && argc == 3) {
+      int len1 = argv[2].length();
       if (len1 <= JEROME_PORT_COUNT) {
         int affected = 0;
         for (uint8_t i = 0; i < len1; i++) {
-          const char c = data[2][i];
+          const char c = argv[2][i];
 
           if (c == '1') {
             jeromeSet(i + 1, 1);
@@ -488,8 +491,8 @@ void onTelnetInput(String str) {
 
         return;
       }
-    } else if (strcmp(data[1], "RID") == 0 && am == 3) {
-      if (strcmp(data[2], "ALL") == 0) {
+    } else if (argv[1] == "RID" && argc == 3) {
+      if (argv[2] == "ALL") {
         telnet.print("#RID,ALL,");
         for (uint8_t i = 1; i <= JEROME_PORT_COUNT; i++) {
           if (jeromeGet(i)) {
@@ -504,7 +507,7 @@ void onTelnetInput(String str) {
         return;
       }
 
-      int32_t line = data.getInt(2);
+      const int32_t line = argv[2].toInt();
 
       if (line >= 1 && line <= JEROME_PORT_COUNT) {
         bool state = jeromeGet(line);
