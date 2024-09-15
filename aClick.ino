@@ -44,6 +44,10 @@
 #define INPUT_IPV4_MASK_ID "ipv4_mask_inp"
 #define INPUT_MAC_ID "mac_inp"
 #define INPUT_TITLE_ID "title_inp"
+#define INPUT_DEV_TITLE_ID_PFX "dev_title_inp"
+
+#define SW_PWR_PFX "sw"
+#define SW_RST_PFX "rst"
 
 #define BUTTON_RESET_ID "reset_btn"
 #define POPUP_RESET_CONFIRM_ID "reset_cnfrm"
@@ -52,13 +56,14 @@
 
 #define TITLE_MAX_LEN 32
 
-struct Data {
+struct Data {  // 512 bytes
   uint32_t ipv4;
   uint32_t mask;
   uint8_t res[4];
   uint8_t mac[ETH_ADDR_LEN];
   char title[TITLE_MAX_LEN];
-  uint8_t reserved[14];
+  char dev_title[INTERFACE_ELEMENTS_COUNT][TITLE_MAX_LEN];  //320
+  uint8_t reserved[142];
 };
 Data nvData;
 
@@ -76,9 +81,6 @@ bool jeromeOutput[JEROME_PORT_COUNT];
 
 int lastWdt = millis();
 int loopCounter = 0;
-
-const char* swPwrPrefix = "sw";
-const char* swRstPrefix = "rst";
 
 String mac2String(uint8_t m[]) {
   String s;
@@ -153,20 +155,19 @@ void uiBuild() {
       GP.LABEL("Custom title");
       GP.TEXT(INPUT_TITLE_ID, "", String(nvData.title), "", TITLE_MAX_LEN));
 
+    for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+      M_BOX(
+        GP.LABEL(String("Dev ") + (i + 1) + " alias");
+        GP.TEXT(String(INPUT_DEV_TITLE_ID_PFX) + "/" + i, "", String(nvData.dev_title[i]), "250px", TITLE_MAX_LEN));
+    }
+
     GP.SUBMIT("Save to NV");
     GP.BUTTON_MINI(BUTTON_RESET_ID, "Reset to defaults", "", GP_RED);
     GP.FORM_END();
 
     GP.CONFIRM(POPUP_RESET_CONFIRM_ID, F("Are you sure want to reset?"));
     GP.UPDATE_CLICK(POPUP_RESET_CONFIRM_ID, BUTTON_RESET_ID);
-    /*
-  } else if (ui.uri("/logs")) {
-    GP.TEXT("txt", "");
-    GP.BUTTON_MINI("btn", "Send", "txt");
-    GP.BREAK();
 
-    GP.AREA_LOG(32);
-*/
   } else if (ui.uri("/upgrade")) {
     GP.OTA_FIRMWARE("Firmware", GP_GREEN, true);
     // GP.OTA_FILESYSTEM("FS", GP_GREEN, true);
@@ -175,26 +176,31 @@ void uiBuild() {
       M_BLOCK_TAB(
         "Power",
         for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
-          M_BOX(GP.LABEL(String("power") + (i + 1) + ": "); GP.SWITCH(String(swPwrPrefix) + "/" + i, jeromeOutput[i]););
+          M_BOX(
+            GP.LABEL(String("power") + (i + 1) + ": ");
+            GP.LABEL(String(nvData.dev_title[i]));
+            GP.SWITCH(String(SW_PWR_PFX) + "/" + i, jeromeOutput[i]););
         });
       M_BLOCK_TAB(
         "Reset",
         for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
-          M_BOX(GP.LABEL(String("reset") + (i + 1) + ": "); GP.SWITCH(String(swRstPrefix) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - 1 - i]););
+          M_BOX(
+            GP.LABEL(String("rst") + (i + 1) + ": ");
+            GP.SWITCH(String(SW_RST_PFX) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - 1 - i]););
         }););
     GP.BUTTON(BUTTON_CLEAR_ALL_ID, "Clear all");
 
     String s;
 
     for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
-      s += swPwrPrefix;
+      s += SW_PWR_PFX;
       s += "/";
       s += i;
       s += ',';
     }
 
     for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
-      s += swRstPrefix;
+      s += SW_RST_PFX;
       s += "/";
       s += i;
       s += ',';
@@ -208,13 +214,13 @@ void uiBuild() {
 
 void uiAction() {
   if (ui.click()) {
-    if (ui.clickSub(swPwrPrefix)) {
+    if (ui.clickSub(SW_PWR_PFX)) {
       uint8_t index = atoi(ui.clickNameSub().c_str());
 
       jeromeOutput[index] = ui.getBool();
       setPower(index + 1, jeromeOutput[index]);
 
-    } else if (ui.clickSub(swRstPrefix)) {
+    } else if (ui.clickSub(SW_RST_PFX)) {
       uint8_t index = atoi(ui.clickNameSub().c_str());
       bool val = ui.getBool();
 
@@ -227,17 +233,14 @@ void uiAction() {
       }
     } else if (ui.click(BUTTON_CLEAR_ALL_ID)) {
       jeromeSetAll(0);
-      /*
-    } else if (ui.click("btn")) {
-      ui.log.println(ui.getString("btn"));*/
     }
   }
 
   if (ui.update()) {
-    if (ui.updateSub(swPwrPrefix)) {
+    if (ui.updateSub(SW_PWR_PFX)) {
       ui.answer(jeromeOutput[atoi(ui.updateNameSub().c_str())]);
 
-    } else if (ui.updateSub(swRstPrefix)) {
+    } else if (ui.updateSub(SW_RST_PFX)) {
       ui.answer(jeromeOutput[JEROME_PORT_COUNT - 1 - atoi(ui.updateNameSub().c_str())]);
 
     } else if (ui.update(POPUP_RESET_CONFIRM_ID)) {
@@ -295,6 +298,22 @@ void uiAction() {
       if (val.length() <= TITLE_MAX_LEN) {
         strncpy(nvData.title, val.c_str(), sizeof(nvData.title));
         changed = true;
+      }
+
+
+      for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+        String s;
+
+        s += INPUT_DEV_TITLE_ID_PFX;
+        s += "/";
+        s += i;
+
+        val = ui.getString(s);
+
+        if (val.length() <= TITLE_MAX_LEN) {
+          strncpy(nvData.dev_title[i], val.c_str(), sizeof(nvData.dev_title[i]));
+          changed = true;
+        }
       }
 
       if (changed) {
@@ -604,6 +623,17 @@ void setupNv() {
     }
   }
 
+  for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    for (int j = 0; j < sizeof(nvData.dev_title[i]); j++) {
+      if (nvData.dev_title[i][j] == 0)
+        break;
+
+      if (!isPrintable((nvData.dev_title[i][j]))) {
+        memset(nvData.dev_title[i], 0, sizeof(nvData.dev_title[i]));
+      }
+    }
+  }
+
   Serial.print("NV IPv4 ");
   Serial.print(IPAddress(nvData.ipv4));
   Serial.print("/");
@@ -623,6 +653,17 @@ void setupWdt() {
   esp_task_wdt_init(&twdt_config);
   esp_task_wdt_add(NULL);  //add current thread to WDT watch
   esp_task_wdt_reset();
+}
+
+void tickWdt()
+{
+  if (millis() - lastWdt >= 2000) {
+    loopCounter++;
+    // Serial.println("Resetting WDT...");
+    digitalWrite(WDT_LED_GPIO, loopCounter % 2);
+    esp_task_wdt_reset();
+    lastWdt = millis();
+  }
 }
 
 void setupUi() {
@@ -674,12 +715,5 @@ void loop() {
   if (fData.tick() == FD_WRITE) Serial.println("NV data updated");
 
   telnet.loop();
-
-  if (millis() - lastWdt >= 2000) {
-    loopCounter++;
-    // Serial.println("Resetting WDT...");
-    digitalWrite(WDT_LED_GPIO, loopCounter % 2);
-    esp_task_wdt_reset();
-    lastWdt = millis();
-  }
+  tickWdt();
 }
