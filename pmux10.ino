@@ -43,6 +43,7 @@
 #define INPUT_IPV4_ID "ipv4_inp"
 #define INPUT_IPV4_MASK_ID "ipv4_mask_inp"
 #define INPUT_MAC_ID "mac_inp"
+#define INPUT_TELNET_PORT_ID "tel_inp"
 #define INPUT_TITLE_ID "title_inp"
 #define INPUT_DEV_TITLE_ID_PFX "dev_title_inp"
 
@@ -68,13 +69,9 @@ struct Data {  // 512 bytes
 Data nvData;
 
 FileData fData(&LittleFS, "/data.bin", 'B', &nvData, sizeof(nvData));
-
 GyverPortal ui(&LittleFS);
-
 WebServer wserver(80);
-
 ESPTelnet telnet;
-
 GyverShift<OUTPUT, SHIFT_CHIP_AMOUNT> shiftRegister(CS_595, DAT_595, CLK_595);
 
 bool jeromeOutput[JEROME_PORT_COUNT];
@@ -151,6 +148,9 @@ void uiBuild() {
     M_BOX(
       GP.LABEL("MAC address");
       GP.TEXT(INPUT_MAC_ID, "", mac2String(nvData.mac)));
+    M_BOX(
+      GP.LABEL("Telnet port");
+      GP.TEXT(INPUT_TELNET_PORT_ID, "", String(TELNET_PORT), "", 0, "", true));
     M_BOX(
       GP.LABEL("Custom title");
       GP.TEXT(INPUT_TITLE_ID, "", String(nvData.title), "", TITLE_MAX_LEN));
@@ -655,8 +655,7 @@ void setupWdt() {
   esp_task_wdt_reset();
 }
 
-void tickWdt()
-{
+void tickWdt() {
   if (millis() - lastWdt >= 2000) {
     loopCounter++;
     // Serial.println("Resetting WDT...");
@@ -698,8 +697,6 @@ void setup() {
   esp_iface_mac_addr_set(nvData.mac, ESP_MAC_ETH);
   ETH.begin();
   ETH.config(IPAddress(nvData.ipv4), IPAddress(nvData.ipv4), IPAddress(nvData.mask));
-
-  //WT32_ETH01_waitForConnect();
 
   setupWdt();
   setupUi();
