@@ -3,8 +3,7 @@
 #include <LittleFS.h>  // must be before GyverPortal
 #include <GyverPortal.h>
 #include <Ethernet.h>
-#define ESP32 1
-#include <WebServer_WT32_ETH01.h>
+#include <ETH.h>
 #include <GyverShift.h>
 #include <StringUtils.h>
 #include <FileData.h>
@@ -119,7 +118,7 @@ bool validIpMask(const IPAddress& mask) {
   return true;
 }
 
-void(* resetFunc) (void) = 0;
+void (*resetFunc)(void) = 0;
 
 void uiBuild() {
   GP.BUILD_BEGIN(GP_DARK, 480);
@@ -721,8 +720,7 @@ void setup() {
   }
   Serial.println(WiFi.localIP());*/
 
-  // To be called before ETH.begin()
-  WT32_ETH01_onEvent();
+  //Network.onEvent(onEvent);
 
   esp_iface_mac_addr_set(nvData.mac, ESP_MAC_ETH);
   ETH.begin();
