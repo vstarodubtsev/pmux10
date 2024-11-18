@@ -3,6 +3,7 @@
 #include <LittleFS.h>  // must be before GyverPortal
 #include <GyverPortal.h>
 #include <Ethernet.h>
+#define ESP32 1
 #include <WebServer_WT32_ETH01.h>
 #include <GyverShift.h>
 #include <StringUtils.h>
@@ -42,6 +43,7 @@
 
 #define INPUT_IPV4_ID "ipv4_inp"
 #define INPUT_IPV4_MASK_ID "ipv4_mask_inp"
+#define INPUT_GW_ID "gw_inp"
 #define INPUT_MAC_ID "mac_inp"
 #define INPUT_TELNET_PORT_ID "tel_inp"
 #define INPUT_TITLE_ID "title_inp"
@@ -53,6 +55,7 @@
 #define BUTTON_RESET_ID "reset_btn"
 #define POPUP_RESET_CONFIRM_ID "reset_cnfrm"
 #define BUTTON_SAVE_ID "save_btn"
+#define BUTTON_RESTART_ID "restart_btn"
 #define BUTTON_CLEAR_ALL_ID "clear_all_btn"
 
 #define TITLE_MAX_LEN 32
@@ -60,7 +63,7 @@
 struct Data {  // 512 bytes
   uint32_t ipv4;
   uint32_t mask;
-  uint8_t res[4];
+  uint32_t gw;
   uint8_t mac[ETH_ADDR_LEN];
   char title[TITLE_MAX_LEN];
   char dev_title[INTERFACE_ELEMENTS_COUNT][TITLE_MAX_LEN];  //320
@@ -116,6 +119,8 @@ bool validIpMask(const IPAddress& mask) {
   return true;
 }
 
+void(* resetFunc) (void) = 0;
+
 void uiBuild() {
   GP.BUILD_BEGIN(GP_DARK, 480);
 
@@ -146,6 +151,9 @@ void uiBuild() {
       GP.LABEL("IP mask");
       GP.TEXT(INPUT_IPV4_MASK_ID, "", IPAddress(nvData.mask).toString()));
     M_BOX(
+      GP.LABEL("IP gateway");
+      GP.TEXT(INPUT_GW_ID, "", IPAddress(nvData.gw).toString()));
+    M_BOX(
       GP.LABEL("MAC address");
       GP.TEXT(INPUT_MAC_ID, "", mac2String(nvData.mac)));
     M_BOX(
@@ -161,7 +169,8 @@ void uiBuild() {
         GP.TEXT(String(INPUT_DEV_TITLE_ID_PFX) + "/" + i, "", String(nvData.dev_title[i]), "250px", TITLE_MAX_LEN));
     }
 
-    GP.SUBMIT("Save to NV");
+    GP.SUBMIT_MINI("Save to NV");
+    GP.BUTTON_MINI(BUTTON_RESTART_ID, "Restart");
     GP.BUTTON_MINI(BUTTON_RESET_ID, "Reset to defaults", "", GP_RED);
     GP.FORM_END();
 
@@ -233,6 +242,8 @@ void uiAction() {
       }
     } else if (ui.click(BUTTON_CLEAR_ALL_ID)) {
       jeromeSetAll(0);
+    } else if (ui.click(BUTTON_RESTART_ID)) {
+      resetFunc();
     }
   }
 
@@ -275,6 +286,17 @@ void uiAction() {
         } else {
           Serial.print("invalid IP mask: ");
           Serial.println(val);
+        }
+      }
+
+      val = ui.getString(INPUT_GW_ID);
+
+      if (!val.isEmpty()) {
+        IPAddress ip;
+
+        if (ip.fromString(val)) {
+          nvData.gw = ip;
+          changed = true;
         }
       }
 
@@ -538,6 +560,8 @@ void onTelnetInput(String str) {
 
         return;
       }
+    } else if (argv[1] == "RST" && argc == 2) {
+      resetFunc();
     }
   }
 
@@ -602,6 +626,10 @@ void setupNv() {
     nvData.mask = IPAddress(255, 255, 255, 0);
   }
 
+  if (nvData.gw == 0 || !nvOk) {
+    nvData.gw = IPAddress(192, 168, 1, 1);
+  }
+
   if ((nvData.mac[0] == 0 && nvData.mac[1] == 0
        && nvData.mac[2] == 0 && nvData.mac[3] == 0
        && nvData.mac[4] == 0 && nvData.mac[5] == 0)
@@ -638,6 +666,8 @@ void setupNv() {
   Serial.print(IPAddress(nvData.ipv4));
   Serial.print("/");
   Serial.println(IPAddress(nvData.mask));
+  Serial.print("GW IPv4 ");
+  Serial.println(IPAddress(nvData.gw));
   Serial.print("NV MAC: ");
   Serial.println(mac2String(nvData.mac));
 }
@@ -696,7 +726,7 @@ void setup() {
 
   esp_iface_mac_addr_set(nvData.mac, ESP_MAC_ETH);
   ETH.begin();
-  ETH.config(IPAddress(nvData.ipv4), IPAddress(nvData.ipv4), IPAddress(nvData.mask));
+  ETH.config(IPAddress(nvData.ipv4), IPAddress(nvData.gw), IPAddress(nvData.mask));
 
   setupWdt();
   setupUi();
