@@ -452,7 +452,7 @@ void onTelnetInput(String str) {
   str.toUpperCase();
 
   // disconnect the client
-  if (str == "bye") {
+  if (str == "BYE") {
     telnet.println("> disconnecting you...");
     telnet.disconnectClient();
 
@@ -516,7 +516,7 @@ void onTelnetInput(String str) {
             jeromeSet(i + 1, 0);
             affected++;
 
-          } else if (c == 'x' || c == 'X') {
+          } else if (c == 'X') {
             ;  //skip item
           } else {
             telnet.println("#ERR");
