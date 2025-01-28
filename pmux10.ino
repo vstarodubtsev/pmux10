@@ -10,7 +10,7 @@
 #include <ESPTelnet.h>
 
 #define PROJECT_NAME "PMUX10"
-#define FIRMWARE_VERSION "1.0"
+#define FIRMWARE_VERSION "1.1rc2"
 
 #define WDT_TIMEOUT 15
 
@@ -162,9 +162,9 @@ void uiBuild() {
       GP.LABEL("Custom title");
       GP.TEXT(INPUT_TITLE_ID, "", String(nvData.title), "", TITLE_MAX_LEN));
 
-    for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
       M_BOX(
-        GP.LABEL(String("Dev ") + (i + 1) + " alias");
+        GP.LABEL(String("Dev ") + i + " alias");
         GP.TEXT(String(INPUT_DEV_TITLE_ID_PFX) + "/" + i, "", String(nvData.dev_title[i]), "250px", TITLE_MAX_LEN));
     }
 
@@ -183,31 +183,31 @@ void uiBuild() {
     M_BOX(
       M_BLOCK_TAB(
         "Power",
-        for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+        for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
           M_BOX(
-            GP.LABEL(String("power") + (i + 1) + ": ");
-            GP.LABEL(String(nvData.dev_title[i]));
-            GP.SWITCH(String(SW_PWR_PFX) + "/" + i, jeromeOutput[i]););
+            GP.LABEL(String("power") + i + ": ");
+            GP.LABEL(String(nvData.dev_title[i - 1]));
+            GP.SWITCH(String(SW_PWR_PFX) + "/" + i, jeromeOutput[i - 1]););
         });
       M_BLOCK_TAB(
         "Reset",
-        for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+        for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
           M_BOX(
-            GP.LABEL(String("rst") + (i + 1) + ": ");
-            GP.SWITCH(String(SW_RST_PFX) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - 1 - i]););
+            GP.LABEL(String("rst") + i + ": ");
+            GP.SWITCH(String(SW_RST_PFX) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - i]););
         }););
     GP.BUTTON(BUTTON_CLEAR_ALL_ID, "Clear all");
 
     String s;
 
-    for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    for (int i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
       s += SW_PWR_PFX;
       s += "/";
       s += i;
       s += ',';
     }
 
-    for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    for (int i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
       s += SW_RST_PFX;
       s += "/";
       s += i;
@@ -223,13 +223,14 @@ void uiBuild() {
 void uiAction() {
   if (ui.click()) {
     if (ui.clickSub(SW_PWR_PFX)) {
-      uint8_t index = atoi(ui.clickNameSub().c_str());
+      uint8_t index = atoi(ui.clickNameSub().c_str()) - 1;
+      bool val = ui.getBool();
 
-      jeromeOutput[index] = ui.getBool();
-      setPower(index + 1, jeromeOutput[index]);
+      jeromeOutput[index] = val;
+      setPower(index + 1, val);
 
     } else if (ui.clickSub(SW_RST_PFX)) {
-      uint8_t index = atoi(ui.clickNameSub().c_str());
+      uint8_t index = atoi(ui.clickNameSub().c_str()) - 1;
       bool val = ui.getBool();
 
       jeromeOutput[JEROME_PORT_COUNT - 1 - index] = val;
@@ -248,10 +249,10 @@ void uiAction() {
 
   if (ui.update()) {
     if (ui.updateSub(SW_PWR_PFX)) {
-      ui.answer(jeromeOutput[atoi(ui.updateNameSub().c_str())]);
+      ui.answer(jeromeOutput[atoi(ui.updateNameSub().c_str()) - 1]);
 
     } else if (ui.updateSub(SW_RST_PFX)) {
-      ui.answer(jeromeOutput[JEROME_PORT_COUNT - 1 - atoi(ui.updateNameSub().c_str())]);
+      ui.answer(jeromeOutput[JEROME_PORT_COUNT - atoi(ui.updateNameSub().c_str())]);
 
     } else if (ui.update(POPUP_RESET_CONFIRM_ID)) {
       ui.answer(1);
@@ -322,7 +323,7 @@ void uiAction() {
       }
 
 
-      for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+      for (int i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
         String s;
 
         s += INPUT_DEV_TITLE_ID_PFX;
@@ -332,7 +333,7 @@ void uiAction() {
         val = ui.getString(s);
 
         if (val.length() <= TITLE_MAX_LEN) {
-          strncpy(nvData.dev_title[i], val.c_str(), sizeof(nvData.dev_title[i]));
+          strncpy(nvData.dev_title[i-1], val.c_str(), sizeof(nvData.dev_title[i-1]));
           changed = true;
         }
       }
