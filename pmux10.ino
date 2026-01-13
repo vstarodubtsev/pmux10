@@ -5,12 +5,16 @@
 #include <Ethernet.h>
 #include <ETH.h>
 #include <GyverShift.h>
+#include <GyverOLED.h>
 #include <StringUtils.h>
 #include <FileData.h>
 #include <ESPTelnet.h>
+#include <uButton.h>
 
 #define PROJECT_NAME "PMUX12"
 #define FIRMWARE_VERSION "1.0"
+
+#define DISPLAY_INSTALLED
 
 #define WDT_TIMEOUT 15
 
@@ -30,7 +34,7 @@
 
 #define BUTTON_GPIO 16
 
-#define SCL_GPIO 2
+#define SCL_GPIO 0
 #define SDA_GPIO 15
 
 #define TELNET_PORT 2424
@@ -74,9 +78,13 @@ GyverPortal ui(&LittleFS);
 WebServer wserver(80);
 ESPTelnet telnet;
 GyverShift<OUTPUT, SHIFT_CHIP_AMOUNT> shiftRegister(CS_595, DAT_595, CLK_595);
+GyverOLED<SSD1306_128x32, OLED_NO_BUFFER> oled;
+uButton btn(BUTTON_GPIO);
 
 bool pwrOutput[INTERFACE_ELEMENTS_COUNT];
 bool rstOutput[INTERFACE_ELEMENTS_COUNT];
+
+bool reboot = false;
 
 int lastWdt = millis();
 int loopCounter = 0;
@@ -117,8 +125,6 @@ bool validIpMask(const IPAddress& mask) {
 
   return true;
 }
-
-void (*resetFunc)(void) = 0;
 
 void uiBuild() {
   GP.BUILD_BEGIN(GP_DARK, 480);
@@ -233,6 +239,7 @@ void uiAction() {
       bool val = ui.getBool();
 
       setRst(index, val);
+      updateDisplay();
 
     } else if (ui.click(POPUP_RESET_CONFIRM_ID)) {
       if (ui.getBool()) {
@@ -241,7 +248,7 @@ void uiAction() {
     } else if (ui.click(BUTTON_CLEAR_ALL_ID)) {
       setAll(0);
     } else if (ui.click(BUTTON_RESTART_ID)) {
-      resetFunc();
+      reboot = true;
     }
   }
 
@@ -339,6 +346,7 @@ void uiAction() {
       if (changed) {
         Serial.println("apply NV");
         fData.update();
+        updateDisplay();
       }
     }
   }
@@ -398,13 +406,9 @@ bool getRst(int num) {
 }
 
 void jeromeSet(int num, bool state) {
-  if (num < 1 || num > JEROME_PORT_COUNT) {
-    return;
-  }
-
-  if (num >= 1 && num <= 10) {
+  if (num >= 1 && num <= 11) {
     setPower(num, state);
-  } else if (num >= 13 && num <= JEROME_PORT_COUNT) {
+  } else if (num >= 12 && num <= JEROME_PORT_COUNT) {
     setRst(JEROME_PORT_COUNT + 1 - num, state);
   }
 }
@@ -423,14 +427,16 @@ void setAll(bool state) {
     pwrOutput[i] = state;
     rstOutput[i] = state;
   }
+
+  updateDisplay();
 }
 
 bool jeromeGet(int num) {
-  if (num >= 1 || num <= 10) {
+  if (num >= 1 && num <= 11) {
     return pwrOutput[num - 1];
   }
 
-  if (num >= 12 || num <= JEROME_PORT_COUNT) {
+  if (num >= 12 && num <= JEROME_PORT_COUNT) {
     return rstOutput[JEROME_PORT_COUNT - num];
   }
 
@@ -496,6 +502,7 @@ void onTelnetInput(String str) {
 
         if (line > 0 && line <= JEROME_PORT_COUNT && state >= 0 && state <= 1) {
           jeromeSet(line, state);
+          updateDisplay();
           telnet.println("#WR,OK");
 
           return;
@@ -524,6 +531,7 @@ void onTelnetInput(String str) {
             return;
           }
         }
+        updateDisplay();
 
         telnet.print("#WRA,OK,");
         telnet.print(affected);
@@ -560,7 +568,16 @@ void onTelnetInput(String str) {
         return;
       }
     } else if (argv[1] == "RST" && argc == 2) {
-      resetFunc();
+      reboot = true;
+      telnet.println("#OK");
+
+      return;
+
+    } else if (argv[1] == "DEFAULT" && argc == 2) {
+      eraseNv();
+      telnet.println("#OK");
+
+      return;
     }
   }
 
@@ -587,6 +604,8 @@ void setupTelnet() {
 void eraseNv() {
   memset(&nvData, 0, sizeof(nvData));
   fData.update();
+
+  reboot = true;
 }
 
 void setupNv() {
@@ -685,6 +704,14 @@ void setupWdt() {
 }
 
 void tickWdt() {
+  if (reboot) {
+    if (millis() - lastWdt >= 200) {
+      loopCounter++;
+      digitalWrite(WDT_LED_GPIO, loopCounter % 2);
+      lastWdt = millis();
+    }
+  }
+
   if (millis() - lastWdt >= 2000) {
     loopCounter++;
     // Serial.println("Resetting WDT...");
@@ -700,6 +727,60 @@ void setupUi() {
   ui.start();
   ui.enableOTA();  // login pass
   //ui.log.start(64);
+}
+
+void setupDisplay() {
+#ifdef DISPLAY_INSTALLED
+  oled.init(SDA_GPIO, SCL_GPIO);
+  oled.invertText(false);
+  oled.clear();
+#endif
+}
+
+void updateDisplay() {
+#ifdef DISPLAY_INSTALLED
+  oled.clear();
+  oled.home();
+  oled.setScale(2);
+
+  String text(nvData.title);
+
+  oled.clear();
+  oled.print(text.c_str());
+  oled.setScale(1);
+  oled.setCursor(0, 2);
+  oled.print(ETH.localIP());
+
+  oled.setCursor(0, 3);
+
+  String resets;
+
+  resets += "rst: ";
+
+  bool hasReset = false;
+
+  for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
+    if (getRst(i)) {
+      resets += i;
+      hasReset = true;
+    } else {
+      resets += " ";
+    }
+  }
+
+  if (hasReset) {
+    oled.print(resets);
+  }
+#endif
+}
+
+void onButton() {
+  //if (btn.click()) Serial.println("Click");
+
+  if (btn.pressFor(10000)) {
+    Serial.println("Press for 10s");
+    eraseNv();
+  }
 }
 
 void setup() {
@@ -729,6 +810,8 @@ void setup() {
   setupWdt();
   setupUi();
   setupTelnet();
+  setupDisplay();
+  updateDisplay();
 
   Serial.print("Init done, IP: ");
   Serial.println(ETH.localIP());
@@ -741,4 +824,8 @@ void loop() {
 
   telnet.loop();
   tickWdt();
+
+  if (btn.tick()) {
+    onButton();
+  }
 }
