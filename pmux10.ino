@@ -9,10 +9,13 @@
 #include <StringUtils.h>
 #include <FileData.h>
 #include <ESPTelnet.h>
+
+#define UB_HOLD_TIME 2000
 #include <uButton.h>
 
 #define PROJECT_NAME "PMUX12"
-#define FIRMWARE_VERSION "1.0"
+#define FIRMWARE_VERSION "1.0.2"
+
 
 #define DISPLAY_INSTALLED
 
@@ -84,7 +87,10 @@ uButton btn(BUTTON_GPIO);
 bool pwrOutput[INTERFACE_ELEMENTS_COUNT];
 bool rstOutput[INTERFACE_ELEMENTS_COUNT];
 
+int displayMode = 0;
+
 bool reboot = false;
+bool btnHold = false;
 
 int lastWdt = millis();
 int loopCounter = 0;
@@ -171,7 +177,7 @@ void uiBuild() {
     for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
       M_BOX(
         GP.LABEL(String("Dev ") + i + " alias");
-        GP.TEXT(String(INPUT_DEV_TITLE_ID_PFX) + "/" + i, "", String(nvData.dev_title[i]), "250px", TITLE_MAX_LEN));
+        GP.TEXT(String(INPUT_DEV_TITLE_ID_PFX) + "/" + i, "", String(nvData.dev_title[i - 1]), "250px", TITLE_MAX_LEN));
     }
 
     GP.SUBMIT_MINI("Save to NV");
@@ -741,46 +747,140 @@ void updateDisplay() {
 #ifdef DISPLAY_INSTALLED
   oled.clear();
   oled.home();
-  oled.setScale(2);
 
-  String text(nvData.title);
+  if (displayMode == 0) {
+    oled.print(nvData.title);
+    oled.setScale(1);
+    oled.setCursor(0, 3);
+    oled.print("ver: " FIRMWARE_VERSION);
 
-  oled.clear();
-  oled.print(text.c_str());
-  oled.setScale(1);
-  oled.setCursor(0, 2);
-  oled.print(ETH.localIP());
+  } else if (displayMode == 1) {
+    oled.print(ETH.localIP());
+    oled.setCursor(0, 1);
+    oled.print(IPAddress(nvData.gw));
+    oled.setCursor(0, 2);
+    oled.print(mac2String(nvData.mac));
+    oled.setCursor(0, 3);
 
-  oled.setCursor(0, 3);
+    String linkState;
 
-  String resets;
+    linkState += "link ";
 
-  resets += "rst: ";
-
-  bool hasReset = false;
-
-  for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
-    if (getRst(i)) {
-      resets += i;
-      hasReset = true;
+    if (ETH.linkUp()) {
+      linkState += ETH.linkSpeed();
+      linkState += ETH.fullDuplex() ? " FD" : " HD";
     } else {
-      resets += " ";
+      linkState += "down";
     }
-  }
 
-  if (hasReset) {
+    oled.print(linkState);
+
+  } else if (displayMode == 2) {
+    oled.print("Resets state:");
+    oled.setCursor(0, 1);
+
+    String resets;
+
+    for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
+      if (getRst(i)) {
+        resets += i;
+      } else {
+        resets += " ";
+      }
+    }
+
     oled.print(resets);
+
+  } else if (displayMode == 3) {
+    uint32_t sec = millis() / 1000ul;
+    uint8_t second = sec % 60ul;
+    sec /= 60ul;
+    uint8_t minute = sec % 60ul;
+    sec /= 60ul;
+    uint16_t hour = sec % 24ul;
+    sec /= 24ul;
+    String s;
+    s.reserve(17);
+    s += "Uptime ";
+    s += sec;  // day
+    s += ':';
+    s += hour;
+    s += ':';
+    s += minute / 10;
+    s += minute % 10;
+    s += ':';
+    s += second / 10;
+    s += second % 10;
+
+    oled.print(s);
+  } else if (displayMode == 4) {
+    oled.setCursor(0, 1);
+    oled.print("restaring device...");
+  } else if (displayMode == 5) {
+    oled.print("hold 10 seconds to");
+    oled.setCursor(0, 1);
+    oled.print("reset settings");
+    oled.setCursor(0, 3);
+    oled.print("release to reboot");
+  } else if (displayMode == 6) {
+    oled.setCursor(0, 1);
+    oled.print("factory resetting...");
   }
 #endif
 }
 
 void onButton() {
-  //if (btn.click()) Serial.println("Click");
+  if (reboot) {
+    return;
+  }
+
+  if (btn.click()) {
+    Serial.println("click");
+    if (++displayMode > 3) {
+      displayMode = 0;
+    }
+    updateDisplay();
+    return;
+  }
+
+  if (btn.hold()) {
+    btnHold = true;
+
+    displayMode = 5;
+    updateDisplay();
+
+    return;
+  }
+
+  if (btn.release()) {
+    if (btnHold) {
+      reboot = true;
+      displayMode = 4;
+      updateDisplay();
+    }
+
+    btnHold = false;
+  }
 
   if (btn.pressFor(10000)) {
-    Serial.println("Press for 10s");
+    btnHold = false;
     eraseNv();
+    displayMode = 6;
+    updateDisplay();
   }
+}
+
+void onEvent(arduino_event_id_t event) {
+  /*  switch (event) {
+    case ARDUINO_EVENT_ETH_START:
+    case ARDUINO_EVENT_ETH_CONNECTED: Serial.println("ETH Connected"); break;
+    case ARDUINO_EVENT_ETH_GOT_IP:
+    case ARDUINO_EVENT_ETH_LOST_IP:
+    case ARDUINO_EVENT_ETH_DISCONNECTED:
+    case ARDUINO_EVENT_ETH_STOP:;
+  }
+*/
+  updateDisplay();
 }
 
 void setup() {
@@ -801,9 +901,8 @@ void setup() {
   }
   Serial.println(WiFi.localIP());*/
 
-  //Network.onEvent(onEvent);
-
   esp_iface_mac_addr_set(nvData.mac, ESP_MAC_ETH);
+  esp_netif_dhcpc_stop(ETH.netif());
   ETH.begin(ETH_PHY_TYPE, 0 /*ETH_PHY_ADDR*/, ETH_PHY_MDC, ETH_PHY_MDIO, /*ETH_PHY_POWER*/ -1, ETH_CLOCK_GPIO17_OUT);
   ETH.config(IPAddress(nvData.ipv4), IPAddress(nvData.gw), IPAddress(nvData.mask));
 
@@ -812,6 +911,8 @@ void setup() {
   setupTelnet();
   setupDisplay();
   updateDisplay();
+
+  Network.onEvent(onEvent);
 
   Serial.print("Init done, IP: ");
   Serial.println(ETH.localIP());
