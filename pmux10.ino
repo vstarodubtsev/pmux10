@@ -10,7 +10,7 @@
 #include <ESPTelnet.h>
 
 #define PROJECT_NAME "PMUX10"
-#define FIRMWARE_VERSION "1.1rc2"
+#define FIRMWARE_VERSION "1.2"
 
 #define WDT_TIMEOUT 15
 
@@ -32,7 +32,7 @@
 #define RST9_GPIO 32
 #define RST10_GPIO 33
 
-#define WDT_LED_GPIO 5  //35
+#define WDT_LED_GPIO 5
 
 #define TELNET_PORT 2424
 
@@ -76,7 +76,9 @@ WebServer wserver(80);
 ESPTelnet telnet;
 GyverShift<OUTPUT, SHIFT_CHIP_AMOUNT> shiftRegister(CS_595, DAT_595, CLK_595);
 
-bool jeromeOutput[JEROME_PORT_COUNT];
+static bool jeromeOutput[JEROME_PORT_COUNT];
+
+static bool reboot = false;
 
 int lastWdt = millis();
 int loopCounter = 0;
@@ -117,8 +119,6 @@ bool validIpMask(const IPAddress& mask) {
 
   return true;
 }
-
-void (*resetFunc)(void) = 0;
 
 void uiBuild() {
   GP.BUILD_BEGIN(GP_DARK, 480);
@@ -165,7 +165,7 @@ void uiBuild() {
     for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
       M_BOX(
         GP.LABEL(String("Dev ") + i + " alias");
-        GP.TEXT(String(INPUT_DEV_TITLE_ID_PFX) + "/" + i, "", String(nvData.dev_title[i]), "250px", TITLE_MAX_LEN));
+        GP.TEXT(String(INPUT_DEV_TITLE_ID_PFX) + "/" + i, "", String(nvData.dev_title[i - 1]), "250px", TITLE_MAX_LEN));
     }
 
     GP.SUBMIT_MINI("Save to NV");
@@ -243,7 +243,7 @@ void uiAction() {
     } else if (ui.click(BUTTON_CLEAR_ALL_ID)) {
       jeromeSetAll(0);
     } else if (ui.click(BUTTON_RESTART_ID)) {
-      resetFunc();
+      reboot = true;
     }
   }
 
@@ -333,7 +333,7 @@ void uiAction() {
         val = ui.getString(s);
 
         if (val.length() <= TITLE_MAX_LEN) {
-          strncpy(nvData.dev_title[i-1], val.c_str(), sizeof(nvData.dev_title[i-1]));
+          strncpy(nvData.dev_title[i - 1], val.c_str(), sizeof(nvData.dev_title[i - 1]));
           changed = true;
         }
       }
@@ -561,7 +561,16 @@ void onTelnetInput(String str) {
         return;
       }
     } else if (argv[1] == "RST" && argc == 2) {
-      resetFunc();
+      reboot = true;
+      telnet.println("#OK");
+
+      return;
+
+    } else if (argv[1] == "DEFAULT" && argc == 2) {
+      eraseNv();
+      telnet.println("#OK");
+
+      return;
     }
   }
 
@@ -588,6 +597,8 @@ void setupTelnet() {
 void eraseNv() {
   memset(&nvData, 0, sizeof(nvData));
   fData.update();
+
+  reboot = true;
 }
 
 void setupNv() {
@@ -686,6 +697,14 @@ void setupWdt() {
 }
 
 void tickWdt() {
+  if (reboot) {
+    if (millis() - lastWdt >= 200) {
+      loopCounter++;
+      digitalWrite(WDT_LED_GPIO, loopCounter % 2);
+      lastWdt = millis();
+    }
+  }
+
   if (millis() - lastWdt >= 2000) {
     loopCounter++;
     // Serial.println("Resetting WDT...");
@@ -724,6 +743,7 @@ void setup() {
   //Network.onEvent(onEvent);
 
   esp_iface_mac_addr_set(nvData.mac, ESP_MAC_ETH);
+  esp_netif_dhcpc_stop(ETH.netif());
   ETH.begin();
   ETH.config(IPAddress(nvData.ipv4), IPAddress(nvData.gw), IPAddress(nvData.mask));
 
