@@ -4,13 +4,12 @@
 #include <GyverPortal.h>
 #include <Ethernet.h>
 #include <ETH.h>
-#include <GyverShift.h>
 #include <StringUtils.h>
 #include <FileData.h>
 #include <ESPTelnet.h>
 
-#define PROJECT_NAME "PMUX10"
-#define FIRMWARE_VERSION "1.2"
+#define PROJECT_NAME "Besprizornik"
+#define FIRMWARE_VERSION "1.0.0"
 
 #define WDT_TIMEOUT 15
 
@@ -19,18 +18,7 @@
 #undef _ETHERNET_WEBSERVER_LOGLEVEL_
 #define _ETHERNET_WEBSERVER_LOGLEVEL_ 3  // Debug Level from 0 to 4
 
-#define SHIFT_CHIP_AMOUNT 2
-
-#define CLK_595 12
-#define CS_595 4
-#define DAT_595 14
-#define nOE_595 15
-
-#define CH9_GPIO 17
-#define CH10_GPIO 2
-
-#define RST9_GPIO 32
-#define RST10_GPIO 33
+#define CH1_GPIO 12
 
 #define WDT_LED_GPIO 5
 
@@ -38,7 +26,7 @@
 
 #define JEROME_PORT_COUNT 22
 
-#define INTERFACE_ELEMENTS_COUNT 10
+#define INTERFACE_ELEMENTS_COUNT 1
 
 #define INPUT_IPV4_ID "ipv4_inp"
 #define INPUT_IPV4_MASK_ID "ipv4_mask_inp"
@@ -46,10 +34,9 @@
 #define INPUT_MAC_ID "mac_inp"
 #define INPUT_TELNET_PORT_ID "tel_inp"
 #define INPUT_TITLE_ID "title_inp"
-#define INPUT_DEV_TITLE_ID_PFX "dev_title_inp"
 
 #define SW_PWR_PFX "sw"
-#define SW_RST_PFX "rst"
+#define SW_PWR_ON_PFX "dsw"
 
 #define BUTTON_RESET_ID "reset_btn"
 #define POPUP_RESET_CONFIRM_ID "reset_cnfrm"
@@ -65,8 +52,8 @@ struct Data {  // 512 bytes
   uint32_t gw;
   uint8_t mac[ETH_ADDR_LEN];
   char title[TITLE_MAX_LEN];
-  char dev_title[INTERFACE_ELEMENTS_COUNT][TITLE_MAX_LEN];  //320
-  uint8_t reserved[142];
+  uint8_t defaultState[INTERFACE_ELEMENTS_COUNT];
+  uint8_t reserved[462 - INTERFACE_ELEMENTS_COUNT];
 };
 Data nvData;
 
@@ -74,7 +61,6 @@ FileData fData(&LittleFS, "/data.bin", 'B', &nvData, sizeof(nvData));
 GyverPortal ui(&LittleFS);
 WebServer wserver(80);
 ESPTelnet telnet;
-GyverShift<OUTPUT, SHIFT_CHIP_AMOUNT> shiftRegister(CS_595, DAT_595, CLK_595);
 
 static bool jeromeOutput[JEROME_PORT_COUNT];
 
@@ -161,11 +147,10 @@ void uiBuild() {
     M_BOX(
       GP.LABEL("Custom title");
       GP.TEXT(INPUT_TITLE_ID, "", String(nvData.title), "", TITLE_MAX_LEN));
-
     for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
       M_BOX(
-        GP.LABEL(String("Dev ") + i + " alias");
-        GP.TEXT(String(INPUT_DEV_TITLE_ID_PFX) + "/" + i, "", String(nvData.dev_title[i - 1]), "250px", TITLE_MAX_LEN));
+        GP.LABEL(String("Power ") + i + " default state");
+        GP.SWITCH(String(SW_PWR_ON_PFX) + "/" + i, nvData.defaultState[i - 1]););
     }
 
     GP.SUBMIT_MINI("Save to NV");
@@ -180,35 +165,19 @@ void uiBuild() {
     GP.OTA_FIRMWARE("Firmware", GP_GREEN, true);
     // GP.OTA_FILESYSTEM("FS", GP_GREEN, true);
   } else {  //home page
-    M_BOX(
-      M_BLOCK_TAB(
-        "Power",
-        for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
-          M_BOX(
-            GP.LABEL(String("power") + i + ": ");
-            GP.LABEL(String(nvData.dev_title[i - 1]));
-            GP.SWITCH(String(SW_PWR_PFX) + "/" + i, jeromeOutput[i - 1]););
-        });
-      M_BLOCK_TAB(
-        "Reset",
-        for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
-          M_BOX(
-            GP.LABEL(String("rst") + i + ": ");
-            GP.SWITCH(String(SW_RST_PFX) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - i]););
-        }););
+    M_BLOCK_TAB(
+      "Power",
+      for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
+        M_BOX(
+          GP.LABEL(String("power") + i + ": ");
+          GP.SWITCH(String(SW_PWR_PFX) + "/" + i, jeromeGet(i)););
+      });
     GP.BUTTON(BUTTON_CLEAR_ALL_ID, "Clear all");
 
     String s;
 
     for (int i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
       s += SW_PWR_PFX;
-      s += "/";
-      s += i;
-      s += ',';
-    }
-
-    for (int i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
-      s += SW_RST_PFX;
       s += "/";
       s += i;
       s += ',';
@@ -226,15 +195,7 @@ void uiAction() {
       uint8_t index = atoi(ui.clickNameSub().c_str()) - 1;
       bool val = ui.getBool();
 
-      jeromeOutput[index] = val;
       setPower(index + 1, val);
-
-    } else if (ui.clickSub(SW_RST_PFX)) {
-      uint8_t index = atoi(ui.clickNameSub().c_str()) - 1;
-      bool val = ui.getBool();
-
-      jeromeOutput[JEROME_PORT_COUNT - 1 - index] = val;
-      setRst(index + 1, val);
 
     } else if (ui.click(POPUP_RESET_CONFIRM_ID)) {
       if (ui.getBool()) {
@@ -249,10 +210,7 @@ void uiAction() {
 
   if (ui.update()) {
     if (ui.updateSub(SW_PWR_PFX)) {
-      ui.answer(jeromeOutput[atoi(ui.updateNameSub().c_str()) - 1]);
-
-    } else if (ui.updateSub(SW_RST_PFX)) {
-      ui.answer(jeromeOutput[JEROME_PORT_COUNT - atoi(ui.updateNameSub().c_str())]);
+      ui.answer(getPower(atoi(ui.updateNameSub().c_str())));
 
     } else if (ui.update(POPUP_RESET_CONFIRM_ID)) {
       ui.answer(1);
@@ -322,20 +280,18 @@ void uiAction() {
         changed = true;
       }
 
-
       for (int i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
         String s;
 
-        s += INPUT_DEV_TITLE_ID_PFX;
+        s += SW_PWR_ON_PFX;
         s += "/";
         s += i;
 
-        val = ui.getString(s);
+        bool val1 = ui.getBool(s);
 
-        if (val.length() <= TITLE_MAX_LEN) {
-          strncpy(nvData.dev_title[i - 1], val.c_str(), sizeof(nvData.dev_title[i - 1]));
-          changed = true;
-        }
+        changed = nvData.defaultState[i - 1] != val1;
+
+        nvData.defaultState[i - 1] = val1;
       }
 
       if (changed) {
@@ -347,48 +303,25 @@ void uiAction() {
 }
 
 void initPeripheral() {
-  digitalWrite(nOE_595, 1);
-  pinMode(nOE_595, OUTPUT);
-  shiftRegister.clearAll();
-  shiftRegister.update();
-  digitalWrite(nOE_595, 0);
-
-  digitalWrite(CH9_GPIO, 0);
-  digitalWrite(CH10_GPIO, 0);
-  digitalWrite(RST9_GPIO, 0);
-  digitalWrite(RST10_GPIO, 0);
-  digitalWrite(WDT_LED_GPIO, 1);
-  pinMode(CH9_GPIO, OUTPUT);
-  pinMode(CH10_GPIO, OUTPUT);
-  pinMode(RST9_GPIO, OUTPUT);
-  pinMode(RST10_GPIO, OUTPUT);
+  pinMode(CH1_GPIO, OUTPUT);
   pinMode(WDT_LED_GPIO, OUTPUT);
+  digitalWrite(CH1_GPIO, 0);
+  digitalWrite(WDT_LED_GPIO, 1);
 }
 
 void setPower(int num, bool state) {
-  if (num > 0 && num <= 8) {
-    shiftRegister[num - 1] = state;
-    shiftRegister.update();
-
-  } else if (num == 9) {
-    digitalWrite(CH9_GPIO, state);
-
-  } else if (num == 10) {
-    digitalWrite(CH10_GPIO, state);
+  if (num == 1) {
+    digitalWrite(CH1_GPIO, state);
+    jeromeOutput[num - 1] = state;
   }
 }
 
-void setRst(int num, bool state) {
-  if (num > 0 && num <= 8) {
-    shiftRegister[16 - num] = state;
-    shiftRegister.update();
-
-  } else if (num == 9) {
-    digitalWrite(RST9_GPIO, state);
-
-  } else if (num == 10) {
-    digitalWrite(RST10_GPIO, state);
+bool getPower(int num) {
+  if (num == 1) {
+    return jeromeOutput[num - 1];
   }
+
+  return false;
 }
 
 void jeromeSet(int num, bool state) {
@@ -396,38 +329,13 @@ void jeromeSet(int num, bool state) {
     return;
   }
 
-  if (num >= 1 && num <= 10) {
+  if (num == 1) {
     setPower(num, state);
-  } else if (num >= 13 && num <= JEROME_PORT_COUNT) {
-    setRst(JEROME_PORT_COUNT + 1 - num, state);
   }
-
-  jeromeOutput[num - 1] = state;
 }
 
 void jeromeSetAll(bool state) {
-  if (state) {
-    shiftRegister.setAll();
-    shiftRegister.update();
-
-    digitalWrite(CH9_GPIO, 1);
-    digitalWrite(CH10_GPIO, 1);
-    digitalWrite(RST9_GPIO, 1);
-    digitalWrite(RST10_GPIO, 1);
-
-  } else {
-    shiftRegister.clearAll();
-    shiftRegister.update();
-
-    digitalWrite(CH9_GPIO, 0);
-    digitalWrite(CH10_GPIO, 0);
-    digitalWrite(RST9_GPIO, 0);
-    digitalWrite(RST10_GPIO, 0);
-  }
-
-  for (uint8_t i = 0; i < JEROME_PORT_COUNT; i++) {
-    jeromeOutput[i] = state;
-  }
+  setPower(1, state);
 }
 
 bool jeromeGet(int num) {
@@ -662,14 +570,9 @@ void setupNv() {
     }
   }
 
-  for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
-    for (int j = 0; j < sizeof(nvData.dev_title[i]); j++) {
-      if (nvData.dev_title[i][j] == 0)
-        break;
-
-      if (!isPrintable((nvData.dev_title[i][j]))) {
-        memset(nvData.dev_title[i], 0, sizeof(nvData.dev_title[i]));
-      }
+  if (!nvOk) {
+    for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+      nvData.defaultState[i] = false;
     }
   }
 
@@ -731,6 +634,12 @@ void setup() {
   Serial.println(FIRMWARE_VERSION);
 
   setupNv();
+
+  for (int i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    if (nvData.defaultState[i]) {
+      setPower(i + 1, true);
+    }
+  }
 
   /*WiFi.mode(WIFI_STA);
   WiFi.begin(AP_SSID, AP_PASS);
