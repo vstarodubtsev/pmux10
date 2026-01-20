@@ -7,6 +7,7 @@
 #include <StringUtils.h>
 #include <FileData.h>
 #include <ESPTelnet.h>
+#include <uButton.h>
 
 #define PROJECT_NAME "Besprizornik"
 #define FIRMWARE_VERSION "1.0.0"
@@ -19,8 +20,8 @@
 #define _ETHERNET_WEBSERVER_LOGLEVEL_ 3  // Debug Level from 0 to 4
 
 #define CH1_GPIO 12
-
 #define WDT_LED_GPIO 5
+#define BUTTON_GPIO 35
 
 #define TELNET_PORT 2424
 
@@ -61,6 +62,7 @@ FileData fData(&LittleFS, "/data.bin", 'B', &nvData, sizeof(nvData));
 GyverPortal ui(&LittleFS);
 WebServer wserver(80);
 ESPTelnet telnet;
+uButton btn(BUTTON_GPIO);
 
 static bool jeromeOutput[JEROME_PORT_COUNT];
 
@@ -625,6 +627,21 @@ void setupUi() {
   //ui.log.start(64);
 }
 
+void onButton() {
+  if (reboot) {
+    return;
+  }
+
+  if (btn.click()) {
+    setPower(1, !getPower(1));
+    return;
+  }
+
+  if (btn.pressFor(10000)) {
+    eraseNv();
+  }
+}
+
 void setup() {
   initPeripheral();
 
@@ -671,4 +688,8 @@ void loop() {
 
   telnet.loop();
   tickWdt();
+
+  if (btn.tick()) {
+    onButton();
+  }
 }
