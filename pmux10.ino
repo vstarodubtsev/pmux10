@@ -172,7 +172,7 @@ void uiBuild() {
       for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
         M_BOX(
           GP.LABEL(String("power") + i + ": ");
-          GP.SWITCH(String(SW_PWR_PFX) + "/" + i, jeromeGet(i)););
+          GP.SWITCH(String(SW_PWR_PFX) + "/" + i, getPower(i)););
       });
     GP.BUTTON(BUTTON_CLEAR_ALL_ID, "Clear all");
 
@@ -194,10 +194,10 @@ void uiBuild() {
 void uiAction() {
   if (ui.click()) {
     if (ui.clickSub(SW_PWR_PFX)) {
-      uint8_t index = atoi(ui.clickNameSub().c_str()) - 1;
+      uint8_t index = atoi(ui.clickNameSub().c_str());
       bool val = ui.getBool();
 
-      setPower(index + 1, val);
+      setPower(index, val);
 
     } else if (ui.click(POPUP_RESET_CONFIRM_ID)) {
       if (ui.getBool()) {
