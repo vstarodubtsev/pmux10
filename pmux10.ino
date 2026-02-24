@@ -10,7 +10,7 @@
 #include <uButton.h>
 
 #define PROJECT_NAME "Besprizornik"
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.0.1"
 
 #define WDT_TIMEOUT 15
 
@@ -43,7 +43,6 @@
 #define POPUP_RESET_CONFIRM_ID "reset_cnfrm"
 #define BUTTON_SAVE_ID "save_btn"
 #define BUTTON_RESTART_ID "restart_btn"
-#define BUTTON_CLEAR_ALL_ID "clear_all_btn"
 
 #define TITLE_MAX_LEN 32
 
@@ -171,10 +170,9 @@ void uiBuild() {
       "Power",
       for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
         M_BOX(
-          GP.LABEL(String("power") + i + ": ");
+          GP.LABEL(String("Power") + i + ": ");
           GP.SWITCH(String(SW_PWR_PFX) + "/" + i, getPower(i)););
       });
-    GP.BUTTON(BUTTON_CLEAR_ALL_ID, "Clear all");
 
     String s;
 
@@ -203,8 +201,6 @@ void uiAction() {
       if (ui.getBool()) {
         eraseNv();
       }
-    } else if (ui.click(BUTTON_CLEAR_ALL_ID)) {
-      jeromeSetAll(0);
     } else if (ui.click(BUTTON_RESTART_ID)) {
       reboot = true;
     }
@@ -227,7 +223,9 @@ void uiAction() {
       if (!val.isEmpty()) {
         IPAddress ip;
 
-        if (ip.fromString(val)) {
+        if (ip.fromString(val) && nvData.ipv4 != ip) {
+          Serial.print("Set IP: ");
+          Serial.println(ip);
           nvData.ipv4 = ip;
           changed = true;
         }
@@ -239,10 +237,12 @@ void uiAction() {
         IPAddress mask;
 
         if (mask.fromString(val) && validIpMask(mask)) {
-          Serial.print("Set IP mask: ");
-          Serial.println(mask);
-          nvData.mask = mask;
-          changed = true;
+          if (nvData.mask != mask) {
+            Serial.print("Set IP mask: ");
+            Serial.println(mask);
+            nvData.mask = mask;
+            changed = true;
+          }
         } else {
           Serial.print("invalid IP mask: ");
           Serial.println(val);
@@ -254,7 +254,7 @@ void uiAction() {
       if (!val.isEmpty()) {
         IPAddress ip;
 
-        if (ip.fromString(val)) {
+        if (ip.fromString(val) && nvData.gw != ip) {
           nvData.gw = ip;
           changed = true;
         }
@@ -265,10 +265,11 @@ void uiAction() {
       if (!val.isEmpty()) {
         uint8_t m[ETH_ADDR_LEN];
 
-        if (parseMac(val.c_str(), ':', m) == 0) {
+        if (parseMac(val.c_str(), ':', m) == 0 && (memcmp(nvData.mac, m, sizeof(m)) != 0)) {
           m[0] &= ~0x01;
-          memcpy(nvData.mac, m, sizeof(m));
+
           changed = true;
+          memcpy(nvData.mac, m, sizeof(m));
 
           Serial.print("Set MAC: ");
           Serial.println(mac2String(nvData.mac));
@@ -277,9 +278,13 @@ void uiAction() {
 
       val = ui.getString(INPUT_TITLE_ID);
 
-      if (val.length() <= TITLE_MAX_LEN) {
-        strncpy(nvData.title, val.c_str(), sizeof(nvData.title));
+      if (val.length() <= TITLE_MAX_LEN && strcmp(nvData.title, val.c_str()) != 0) {
         changed = true;
+
+        strncpy(nvData.title, val.c_str(), sizeof(nvData.title));
+
+        Serial.print("Set title: ");
+        Serial.println(val);
       }
 
       for (int i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
@@ -291,13 +296,13 @@ void uiAction() {
 
         bool val1 = ui.getBool(s);
 
-        changed = nvData.defaultState[i - 1] != val1;
+        changed |= nvData.defaultState[i - 1] != val1;
 
         nvData.defaultState[i - 1] = val1;
       }
 
       if (changed) {
-        Serial.println("apply NV");
+        Serial.println("Apply NV");
         fData.update();
       }
     }
