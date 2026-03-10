@@ -14,7 +14,7 @@
 #include <uButton.h>
 
 #define PROJECT_NAME "PMUX12"
-#define FIRMWARE_VERSION "1.0.2"
+#define FIRMWARE_VERSION "1.0.3"
 
 
 #define DISPLAY_INSTALLED
@@ -383,6 +383,20 @@ void setPower(int num, bool state) {
   pwrOutput[num - 1] = state;
 }
 
+void setAllPower(bool state) {
+  for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    pwrOutput[i] = state;
+
+    if (i < 8) {
+      shiftRegister[i] = state;
+    } else {
+      shiftRegister[8 + i] = state;
+    }
+  }
+
+  shiftRegister.update();
+}
+
 bool getPower(int num) {
   if (num < 1 || num > INTERFACE_ELEMENTS_COUNT) {
     return false;
@@ -402,6 +416,20 @@ void setRst(int num, bool state) {
 
   shiftRegister.update();
   rstOutput[num - 1] = state;
+}
+
+void setAllRst(bool state) {
+  for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    rstOutput[i] = state;
+
+    if (i < 8) {
+      shiftRegister[15 - i] = state;
+    } else {
+      shiftRegister[12 + i] = state;
+    }
+  }
+
+  shiftRegister.update();
 }
 
 bool getRst(int num) {
@@ -508,8 +536,48 @@ void onTelnetInput(String str) {
 
         if (line > 0 && line <= JEROME_PORT_COUNT && state >= 0 && state <= 1) {
           jeromeSet(line, state);
-          updateDisplay();
           telnet.println("#WR,OK");
+
+          updateDisplay();
+
+          return;
+        }
+      }
+    } else if ((argv[1] == "PWR" || argv[1] == "RST") && argc == 4) {
+      if (argv[3] != "ON" && argv[3] != "OFF" && argv[3] != "1" && argv[3] != "0") {
+        telnet.println("#ERR");
+
+        return;
+      }
+
+      const bool isPower = (argv[1] == "PWR");
+      const bool state = (argv[3] == "ON" || argv[3] == "1");
+
+      if (argv[2] == "ALL") {
+
+        if (isPower) {
+          setAllPower(state);
+          telnet.println("#PWR,OK");
+        } else {
+          setAllRst(state);
+          telnet.println("#RST,OK");
+        }
+
+        return;
+
+      } else {
+        const int32_t line = argv[2].toInt();
+
+        if (line > 0 && line <= INTERFACE_ELEMENTS_COUNT) {
+          if (isPower) {
+            setPower(line, state);
+            telnet.println("#PWR,OK");
+          } else {
+            setRst(line, state);
+            telnet.println("#RST,OK");
+          }
+
+          updateDisplay();
 
           return;
         }
@@ -537,11 +605,12 @@ void onTelnetInput(String str) {
             return;
           }
         }
-        updateDisplay();
 
         telnet.print("#WRA,OK,");
         telnet.print(affected);
         telnet.println();
+
+        updateDisplay();
 
         return;
       }
