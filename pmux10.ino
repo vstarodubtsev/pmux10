@@ -14,8 +14,9 @@
 #include <uButton.h>
 
 #define PROJECT_NAME "PMUX12"
-#define FIRMWARE_VERSION "1.0.3"
+#define FIRMWARE_VERSION "1.0.4"
 
+#define DISPLAY_LIFE_MS 60000
 
 #define DISPLAY_INSTALLED
 
@@ -65,6 +66,33 @@
 
 #define TITLE_MAX_LEN 32
 
+enum DisplayModeT {
+  DISP_MODE_TITLE = 0,
+  DISP_MODE_NET,
+  DISP_MODE_LINK,
+  DISP_MODE_UPTIME,
+  DISP_MODE_DEV1,
+  DISP_MODE_DEV2,
+  DISP_MODE_DEV3,
+  DISP_MODE_DEV4,
+  DISP_MODE_DEV5,
+  DISP_MODE_DEV6,
+  DISP_MODE_DEV7,
+  DISP_MODE_DEV8,
+  DISP_MODE_DEV9,
+  DISP_MODE_DEV10,
+  DISP_MODE_DEV11,
+  DISP_MODE_DEV12,
+  DISP_MODE_RESTARTING,
+  DISP_MODE_BUTTON_HINT,
+  DISP_MODE_FACTORY_RESETTING
+};
+
+enum {
+  DISP_MIN_USER_MODE = DISP_MODE_TITLE,
+  DISP_MAX_USER_MODE = DISP_MODE_DEV12
+};
+
 struct Data {  // 512 bytes
   uint32_t ipv4;
   uint32_t mask;
@@ -91,8 +119,11 @@ int displayMode = 0;
 
 bool reboot = false;
 bool btnHold = false;
+bool displayOn = true;
 
 int lastWdt = millis();
+int lastButtonAct = millis();
+int lastDisplayUpdate = millis();
 int loopCounter = 0;
 
 String mac2String(uint8_t m[]) {
@@ -239,6 +270,7 @@ void uiAction() {
       bool val = ui.getBool();
 
       setPower(index, val);
+      updateDisplay();
 
     } else if (ui.clickSub(SW_RST_PFX)) {
       uint8_t index = atoi(ui.clickNameSub().c_str());
@@ -255,6 +287,8 @@ void uiAction() {
       setAll(0);
     } else if (ui.click(BUTTON_RESTART_ID)) {
       reboot = true;
+      displayMode = DISP_MODE_RESTARTING;
+      updateDisplay();
     }
   }
 
@@ -563,6 +597,7 @@ void onTelnetInput(String str) {
           telnet.println("#RST,OK");
         }
 
+        updateDisplay();
         return;
 
       } else {
@@ -643,8 +678,12 @@ void onTelnetInput(String str) {
         return;
       }
     } else if (argv[1] == "RST" && argc == 2) {
-      reboot = true;
+
       telnet.println("#OK");
+
+      reboot = true;
+      displayMode = DISP_MODE_FACTORY_RESETTING;
+      updateDisplay();
 
       return;
 
@@ -681,6 +720,8 @@ void eraseNv() {
   fData.update();
 
   reboot = true;
+  displayMode = DISP_MODE_FACTORY_RESETTING;
+  updateDisplay();
 }
 
 void setupNv() {
@@ -808,59 +849,58 @@ void setupDisplay() {
 #ifdef DISPLAY_INSTALLED
   oled.init(SDA_GPIO, SCL_GPIO);
   oled.invertText(false);
+  oled.setScale(2);
   oled.clear();
 #endif
 }
 
 void updateDisplay() {
 #ifdef DISPLAY_INSTALLED
+  if (!displayOn && !reboot) {
+    return;
+  }
+
+  lastDisplayUpdate = millis();
+
   oled.clear();
   oled.home();
+  oled.setScale(2);
 
-  if (displayMode == 0) {
+  if (displayMode == DISP_MODE_TITLE) {
+    if (strnlen(nvData.title, sizeof(nvData.title)) > 11) {
+      oled.setScale(1);
+    }
     oled.print(nvData.title);
-    oled.setScale(1);
     oled.setCursor(0, 3);
+    oled.setScale(1);
     oled.print("ver: " FIRMWARE_VERSION);
 
-  } else if (displayMode == 1) {
+  } else if (displayMode == DISP_MODE_NET) {
+    oled.setScale(1);
     oled.print(ETH.localIP());
     oled.setCursor(0, 1);
-    oled.print(IPAddress(nvData.gw));
-    oled.setCursor(0, 2);
-    oled.print(mac2String(nvData.mac));
+    oled.print(IPAddress(nvData.mask));
     oled.setCursor(0, 3);
+    oled.print(IPAddress(nvData.gw));
 
+  } else if (displayMode == DISP_MODE_LINK) {
     String linkState;
 
-    linkState += "link ";
+    linkState += "Link ";
 
     if (ETH.linkUp()) {
       linkState += ETH.linkSpeed();
-      linkState += ETH.fullDuplex() ? " FD" : " HD";
+      linkState += ETH.fullDuplex() ? "FD" : "HD";
     } else {
       linkState += "down";
     }
 
     oled.print(linkState);
+    oled.setScale(1);
+    oled.setCursor(0, 3);
+    oled.print(mac2String(nvData.mac));
 
-  } else if (displayMode == 2) {
-    oled.print("Resets state:");
-    oled.setCursor(0, 1);
-
-    String resets;
-
-    for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
-      if (getRst(i)) {
-        resets += i;
-      } else {
-        resets += " ";
-      }
-    }
-
-    oled.print(resets);
-
-  } else if (displayMode == 3) {
+  } else if (displayMode == DISP_MODE_UPTIME) {
     uint32_t sec = millis() / 1000ul;
     uint8_t second = sec % 60ul;
     sec /= 60ul;
@@ -870,7 +910,6 @@ void updateDisplay() {
     sec /= 24ul;
     String s;
     s.reserve(17);
-    s += "Uptime ";
     s += sec;  // day
     s += ':';
     s += hour;
@@ -881,20 +920,61 @@ void updateDisplay() {
     s += second / 10;
     s += second % 10;
 
+    oled.print("Uptime");
+    oled.setCursor(0, 2);
+
+    if (s.length() > 11) {
+      oled.setScale(1);
+    }
+
     oled.print(s);
-  } else if (displayMode == 4) {
-    oled.setCursor(0, 1);
-    oled.print("restaring device...");
-  } else if (displayMode == 5) {
-    oled.print("hold 10 seconds to");
+  } else if (displayMode >= DISP_MODE_DEV1 && displayMode <= DISP_MODE_DEV12) {
+    int devNum = displayMode - DISP_MODE_DEV1 + 1;
+
+    oled.setScale(1);
+    oled.print("DEVICE ");
+    oled.print(devNum);
+    oled.print(" ");
+    oled.print(nvData.dev_title[devNum - 1]);
+
+    oled.setCursor(0, 2);
+    oled.print("POWER ");
+    oled.print(getPower(devNum) ? "ON" : "OFF");
+    oled.setCursor(0, 3);
+    oled.print("RESET ");
+    oled.print(getRst(devNum) ? "ON" : "OFF");
+
+  } else if (displayMode == DISP_MODE_RESTARTING) {
+    oled.autoPrintln(true);
+    oled.print("Restaring device...");
+  } else if (displayMode == DISP_MODE_BUTTON_HINT) {
+    oled.setScale(1);
+    oled.print("Hold 10 seconds to");
     oled.setCursor(0, 1);
     oled.print("reset settings");
     oled.setCursor(0, 3);
     oled.print("release to reboot");
-  } else if (displayMode == 6) {
-    oled.setCursor(0, 1);
-    oled.print("factory resetting...");
+  } else if (displayMode == DISP_MODE_FACTORY_RESETTING) {
+    oled.autoPrintln(true);
+    oled.print("Factory resetting...");
   }
+#endif
+}
+
+void displayTick() {
+#ifdef DISPLAY_INSTALLED
+  const bool displaySetOn = (millis() - lastButtonAct < DISPLAY_LIFE_MS);
+
+  if (displaySetOn != displayOn) {
+    displayOn = displaySetOn;
+    oled.setPower(displayOn);
+    updateDisplay();
+  }
+
+  if (displayMode == DISP_MODE_UPTIME && millis() - lastDisplayUpdate > 1000) {
+    updateDisplay();
+  }
+
 #endif
 }
 
@@ -903,19 +983,44 @@ void onButton() {
     return;
   }
 
-  if (btn.click()) {
-    Serial.println("click");
-    if (++displayMode > 3) {
-      displayMode = 0;
-    }
-    updateDisplay();
+  lastButtonAct = millis();
+
+  if (!displayOn) {
     return;
+  }
+
+  if (btn.hasClicks(1)) {
+    if (++displayMode > DISP_MAX_USER_MODE) {
+      displayMode = DISP_MIN_USER_MODE;
+    }
+
+    updateDisplay();
+
+    return;
+  }
+
+  if (btn.hasClicks(2)) {
+    if (displayMode >= DISP_MODE_DEV1 && displayMode <= DISP_MODE_DEV12) {
+      int devNum = displayMode - DISP_MODE_DEV1 + 1;
+
+      setPower(devNum, !getPower(devNum));
+      updateDisplay();
+      return;
+    }
+  } else if (btn.hasClicks(3)) {
+    if (displayMode >= DISP_MODE_DEV1 && displayMode <= DISP_MODE_DEV12) {
+      int devNum = displayMode - DISP_MODE_DEV1 + 1;
+
+      setRst(devNum, !getRst(devNum));
+      updateDisplay();
+      return;
+    }
   }
 
   if (btn.hold()) {
     btnHold = true;
 
-    displayMode = 5;
+    displayMode = DISP_MODE_BUTTON_HINT;
     updateDisplay();
 
     return;
@@ -924,7 +1029,7 @@ void onButton() {
   if (btn.release()) {
     if (btnHold) {
       reboot = true;
-      displayMode = 4;
+      displayMode = DISP_MODE_RESTARTING;
       updateDisplay();
     }
 
@@ -934,7 +1039,7 @@ void onButton() {
   if (btn.pressFor(10000)) {
     btnHold = false;
     eraseNv();
-    displayMode = 6;
+    displayMode = DISP_MODE_FACTORY_RESETTING;
     updateDisplay();
   }
 }
@@ -998,4 +1103,6 @@ void loop() {
   if (btn.tick()) {
     onButton();
   }
+
+  displayTick();
 }
