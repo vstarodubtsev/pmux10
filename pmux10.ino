@@ -10,7 +10,7 @@
 #include <ESPTelnet.h>
 
 #define PROJECT_NAME "PMUX10"
-#define FIRMWARE_VERSION "1.2"
+#define FIRMWARE_VERSION "1.3"
 
 #define WDT_TIMEOUT 15
 
@@ -76,7 +76,8 @@ WebServer wserver(80);
 ESPTelnet telnet;
 GyverShift<OUTPUT, SHIFT_CHIP_AMOUNT> shiftRegister(CS_595, DAT_595, CLK_595);
 
-static bool jeromeOutput[JEROME_PORT_COUNT];
+bool pwrOutput[INTERFACE_ELEMENTS_COUNT];
+bool rstOutput[INTERFACE_ELEMENTS_COUNT];
 
 static bool reboot = false;
 
@@ -187,14 +188,14 @@ void uiBuild() {
           M_BOX(
             GP.LABEL(String("power") + i + ": ");
             GP.LABEL(String(nvData.dev_title[i - 1]));
-            GP.SWITCH(String(SW_PWR_PFX) + "/" + i, jeromeOutput[i - 1]););
+            GP.SWITCH(String(SW_PWR_PFX) + "/" + i, getPower(i)););
         });
       M_BLOCK_TAB(
         "Reset",
         for (uint8_t i = 1; i <= INTERFACE_ELEMENTS_COUNT; i++) {
           M_BOX(
             GP.LABEL(String("rst") + i + ": ");
-            GP.SWITCH(String(SW_RST_PFX) + "/" + i, jeromeOutput[JEROME_PORT_COUNT - i]););
+            GP.SWITCH(String(SW_RST_PFX) + "/" + i, getRst(i)););
         }););
     GP.BUTTON(BUTTON_CLEAR_ALL_ID, "Clear all");
 
@@ -223,25 +224,23 @@ void uiBuild() {
 void uiAction() {
   if (ui.click()) {
     if (ui.clickSub(SW_PWR_PFX)) {
-      uint8_t index = atoi(ui.clickNameSub().c_str()) - 1;
+      uint8_t index = atoi(ui.clickNameSub().c_str());
       bool val = ui.getBool();
 
-      jeromeOutput[index] = val;
-      setPower(index + 1, val);
+      setPower(index, val);
 
     } else if (ui.clickSub(SW_RST_PFX)) {
-      uint8_t index = atoi(ui.clickNameSub().c_str()) - 1;
+      uint8_t index = atoi(ui.clickNameSub().c_str());
       bool val = ui.getBool();
 
-      jeromeOutput[JEROME_PORT_COUNT - 1 - index] = val;
-      setRst(index + 1, val);
+      setRst(index, val);
 
     } else if (ui.click(POPUP_RESET_CONFIRM_ID)) {
       if (ui.getBool()) {
         eraseNv();
       }
     } else if (ui.click(BUTTON_CLEAR_ALL_ID)) {
-      jeromeSetAll(0);
+      setAll(0);
     } else if (ui.click(BUTTON_RESTART_ID)) {
       reboot = true;
     }
@@ -249,10 +248,10 @@ void uiAction() {
 
   if (ui.update()) {
     if (ui.updateSub(SW_PWR_PFX)) {
-      ui.answer(jeromeOutput[atoi(ui.updateNameSub().c_str()) - 1]);
+      ui.answer(getPower(atoi(ui.updateNameSub().c_str())));
 
     } else if (ui.updateSub(SW_RST_PFX)) {
-      ui.answer(jeromeOutput[JEROME_PORT_COUNT - atoi(ui.updateNameSub().c_str())]);
+      ui.answer(getRst(atoi(ui.updateNameSub().c_str())));
 
     } else if (ui.update(POPUP_RESET_CONFIRM_ID)) {
       ui.answer(1);
@@ -376,6 +375,34 @@ void setPower(int num, bool state) {
   } else if (num == 10) {
     digitalWrite(CH10_GPIO, state);
   }
+
+  pwrOutput[num - 1] = state;
+}
+
+void setAllPower(bool state) {
+  for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    pwrOutput[i] = state;
+
+    if (i < 8) {
+      shiftRegister[i] = state;
+
+    } else if (i == 8) {
+      digitalWrite(CH9_GPIO, state);
+
+    } else if (i == 9) {
+      digitalWrite(CH10_GPIO, state);
+    }
+  }
+
+  shiftRegister.update();
+}
+
+bool getPower(int num) {
+  if (num < 1 || num > INTERFACE_ELEMENTS_COUNT) {
+    return false;
+  }
+
+  return pwrOutput[num - 1];
 }
 
 void setRst(int num, bool state) {
@@ -389,6 +416,32 @@ void setRst(int num, bool state) {
   } else if (num == 10) {
     digitalWrite(RST10_GPIO, state);
   }
+
+  rstOutput[num - 1] = state;
+}
+
+void setAllRst(bool state) {
+  for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    rstOutput[i] = state;
+
+    if (i < 8) {
+      shiftRegister[15 - i] = state;
+    } else if (i == 8) {
+      digitalWrite(RST9_GPIO, state);
+
+    } else if (i == 9) {
+      digitalWrite(RST10_GPIO, state);
+    }
+  }
+
+  shiftRegister.update();
+}
+
+bool getRst(int num) {
+  if (num < 1 || num > INTERFACE_ELEMENTS_COUNT) {
+    return false;
+  }
+  return rstOutput[num - 1];
 }
 
 void jeromeSet(int num, bool state) {
@@ -401,11 +454,9 @@ void jeromeSet(int num, bool state) {
   } else if (num >= 13 && num <= JEROME_PORT_COUNT) {
     setRst(JEROME_PORT_COUNT + 1 - num, state);
   }
-
-  jeromeOutput[num - 1] = state;
 }
 
-void jeromeSetAll(bool state) {
+void setAll(bool state) {
   if (state) {
     shiftRegister.setAll();
     shiftRegister.update();
@@ -425,17 +476,22 @@ void jeromeSetAll(bool state) {
     digitalWrite(RST10_GPIO, 0);
   }
 
-  for (uint8_t i = 0; i < JEROME_PORT_COUNT; i++) {
-    jeromeOutput[i] = state;
+  for (uint8_t i = 0; i < INTERFACE_ELEMENTS_COUNT; i++) {
+    pwrOutput[i] = state;
+    rstOutput[i] = state;
   }
 }
 
 bool jeromeGet(int num) {
-  if (num < 1 || num > JEROME_PORT_COUNT) {
-    return false;
+  if (num >= 1 && num <= 10) {
+    return pwrOutput[num - 1];
   }
 
-  return jeromeOutput[num - 1];
+  if (num >= 13 && num <= JEROME_PORT_COUNT) {
+    return rstOutput[JEROME_PORT_COUNT - num];
+  }
+
+  return false;
 }
 
 void onTelnetConnect(String ip) {
@@ -480,13 +536,13 @@ void onTelnetInput(String str) {
     if (argv[1] == "WR" && argc == 4) {
       if (argv[2] == "ALL") {
         if (argv[3] == "ON") {
-          jeromeSetAll(1);
+          setAll(1);
           telnet.println("#WR,OK");
           return;
         }
 
         if (argv[3] == "OFF") {
-          jeromeSetAll(0);
+          setAll(0);
           telnet.println("#WR,OK");
 
           return;
@@ -498,6 +554,43 @@ void onTelnetInput(String str) {
         if (line > 0 && line <= JEROME_PORT_COUNT && state >= 0 && state <= 1) {
           jeromeSet(line, state);
           telnet.println("#WR,OK");
+
+          return;
+        }
+      }
+    } else if ((argv[1] == "PWR" || argv[1] == "RST") && argc == 4) {
+      if (argv[3] != "ON" && argv[3] != "OFF" && argv[3] != "1" && argv[3] != "0") {
+        telnet.println("#ERR");
+
+        return;
+      }
+
+      const bool isPower = (argv[1] == "PWR");
+      const bool state = (argv[3] == "ON" || argv[3] == "1");
+
+      if (argv[2] == "ALL") {
+
+        if (isPower) {
+          setAllPower(state);
+          telnet.println("#PWR,OK");
+        } else {
+          setAllRst(state);
+          telnet.println("#RST,OK");
+        }
+
+        return;
+
+      } else {
+        const int32_t line = argv[2].toInt();
+
+        if (line > 0 && line <= INTERFACE_ELEMENTS_COUNT) {
+          if (isPower) {
+            setPower(line, state);
+            telnet.println("#PWR,OK");
+          } else {
+            setRst(line, state);
+            telnet.println("#RST,OK");
+          }
 
           return;
         }
