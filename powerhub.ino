@@ -13,7 +13,7 @@
 #define UB_HOLD_TIME 2000
 #include <uButton.h>
 
-#define PROJECT_NAME "PMUX12"
+#define PROJECT_NAME "POWERHUB12"
 #define FIRMWARE_VERSION "1.0.4"
 
 #define DISPLAY_LIFE_MS 60000
